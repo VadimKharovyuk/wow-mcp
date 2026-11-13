@@ -14,6 +14,8 @@ import org.springframework.stereotype.Component;
 import java.io.IOException;
 import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.Callable;
@@ -36,11 +38,13 @@ public class GameBridge implements AutoCloseable {
 
     private static final Logger log = LoggerFactory.getLogger(GameBridge.class);
 
-    private static final String BOT_JS = readResource("bot.js");
+    private static final String BOT_JS_RESOURCE = "bot.js";
     private static final List<String> LUA_SETUP = readResourceLines("lua-setup.txt");
 
     private static final long LUA_LINE_PAUSE_MS = 700;
     private static final long STATE_TIME_WINDOW_MS = 1000;
+    /** Пауза после bot.stop() перед удалением бота: чтобы клавиши успели отпуститься. */
+    private static final long RELOAD_RELEASE_KEYS_PAUSE_MS = 200;
 
     private static final String LUA_NOT_FOUND_MESSAGE =
             "Lua-таблица не найдена: проверь, что персонаж в игре и чат не занят";
@@ -102,6 +106,30 @@ public class GameBridge implements AutoCloseable {
             ensureReadyInternal();
             return null;
         }));
+    }
+
+    /**
+     * Перезагружает bot.js в странице игры без перезагрузки самой страницы.
+     *
+     * <p>Останавливает бота (чтобы отпустились клавиши), удаляет {@code window.bot}
+     * и снова проходит обычную подготовку: скрипт вставляется заново, затем выполняется
+     * Lua-подготовка и поиск таблицы.
+     */
+    public String reloadBot() {
+        return onPlaywrightThread(() -> retryOnDisconnect(() -> {
+            log.info("Перезагружаю bot.js, старый бот останавливается");
+            page.evaluate("() => { if (window.bot) window.bot.stop(); }");
+            sleep(RELOAD_RELEASE_KEYS_PAUSE_MS);
+            page.evaluate("() => { delete window.bot; }");
+            ensureReadyInternal();
+            return "бот перезагружен: " + botJsSource();
+        }));
+    }
+
+    /** Откуда берётся bot.js — для отчёта reload_bot. */
+    private String botJsSource() {
+        String path = properties.botJsPath();
+        return path == null ? "из classpath" : "с диска " + path;
     }
 
     /** Произвольное выражение/функция в контексте страницы игры. */
@@ -204,10 +232,26 @@ public class GameBridge implements AutoCloseable {
     }
 
     private void injectBot() {
-        log.info("Загружаю bot.js в страницу игры");
-        page.evaluate("(src) => { (0, eval)(src); }", BOT_JS);
+        log.info("Загружаю bot.js в страницу игры ({})", botJsSource());
+        page.evaluate("(src) => { (0, eval)(src); }", readBotJs());
         if (!isBotLoaded()) {
             throw new IllegalStateException("Не удалось загрузить bot.js: window.bot не появился");
+        }
+    }
+
+    /**
+     * Читает bot.js: с диска, если задано {@code wow.bot-js-path}, иначе из classpath.
+     * При заданном пути файл читается при каждой загрузке — пересборка не нужна.
+     */
+    private String readBotJs() {
+        String path = properties.botJsPath();
+        if (path == null) {
+            return readResource(BOT_JS_RESOURCE);
+        }
+        try {
+            return Files.readString(Path.of(path), StandardCharsets.UTF_8);
+        } catch (IOException e) {
+            throw new IllegalStateException("Не удалось прочитать bot.js по пути " + path, e);
         }
     }
 

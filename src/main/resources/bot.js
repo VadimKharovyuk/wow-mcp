@@ -90,14 +90,19 @@ window.bot = {
   stop() { this.running = false; for (const k in this.held) this.key(k, false); },
 
   // бег к точке (координаты зоны 0–100); останавливается при бое
-  async moveTo(tx, ty, { tol = 0.3, timeout = 60000 } = {}) {
+  // обход препятствий: прыжок, затем шаг назад + поворот + пробежка в сторону
+  async moveTo(tx, ty, { tol = 0.3, timeout = 90000 } = {}) {
     const norm = a => Math.atan2(Math.sin(a), Math.cos(a));
+    const hold = async (keys, ms) => {
+      keys.forEach(k => this.key(k, true)); await sleep(ms); keys.forEach(k => this.key(k, false));
+    };
     this.running = true;
-    let stuck = 0, last = this.state(), lastMove = Date.now();
+    let stuck = 0, side = 1, last = this.state(), lastMove = Date.now();
     const t0 = Date.now();
+
     while (this.running) {
       const s = this.state();
-      const done = r => { this.stop(); return { result: r, ...s }; };
+      const done = r => { this.stop(); return { result: r, stuckTries: stuck, ...s }; };
       if (s.x === 0 && s.y === 0) return done('нет координат (закрой карту мира)');
       if (s.fight) return done('бой');
       const dx = tx - s.x, dy = ty - s.y;
@@ -111,9 +116,19 @@ window.bot = {
       this.key('W', Math.abs(err) < 0.6);
 
       if (Math.hypot(s.x - last.x, s.y - last.y) > 0.05) { last = s; lastMove = Date.now(); }
-      else if (this.held.W && Date.now() - lastMove > 2500) {
-        await this.tap('SPACE'); lastMove = Date.now();
-        if (++stuck > 3) return done('застрял');
+      else if (this.held.W && Date.now() - lastMove > 1500) {
+        // упёрлись
+        if (++stuck > 6) return done('застрял');
+        this.key('W', false); this.key('A', false); this.key('D', false);
+        if (stuck === 1) {
+          await this.tap('SPACE');                       // сначала просто прыжок (низкий забор, камень)
+        } else {
+          await hold(['S'], 600);                        // шаг назад
+          await hold([side > 0 ? 'A' : 'D'], 400 + 150 * stuck);   // поворот ~70–180°
+          await hold(['W'], 1500 + 300 * stuck);         // пробежать в сторону
+          if (stuck % 2 === 1) side = -side;             // чередовать лево/право
+        }
+        last = this.state(); lastMove = Date.now();
       }
       await sleep(100);
     }

@@ -19,6 +19,7 @@ Java-приложение подключается к уже запущенно�
 | `rest` | Отдыхать до 80% HP (фоном) |
 | `wait_job(maxSeconds)` | Ждать завершения задачи, опрос раз в секунду. По умолчанию 30 с, максимум 60 с |
 | `stop` | Экстренная остановка |
+| `reload_bot` | Перезагрузить `bot.js` в открытой странице игры (без её перезагрузки) |
 
 Все инструменты возвращают короткую JSON-строку. Координаты — 0..100 (координаты зоны).
 
@@ -71,6 +72,20 @@ Java-приложение подключается к уже запущенно�
 }
 ```
 
+Если хочешь править `bot.js` без пересборки jar, добавь свойство `wow.bot-js-path`
+(см. раздел «Живая правка bot.js»):
+
+```json
+{
+  "type": "local",
+  "command": [
+    "java",
+    "-Dwow.bot-js-path=/Users/vadim/Downloads/wow-mcp/src/main/resources/bot.js",
+    "-jar", "/Users/vadim/Downloads/wow-mcp/target/wow-mcp.jar"
+  ]
+}
+```
+
 Проверка:
 
 ```bash
@@ -78,7 +93,7 @@ opencode mcp list
 ```
 
 В списке должен появиться `wow` с инструментами `get_state`, `go_to`, `move_to`, `fight`,
-`rest`, `wait_job`, `stop`.
+`rest`, `wait_job`, `stop`, `reload_bot`.
 
 ## Проверка по ТЗ
 
@@ -100,6 +115,7 @@ opencode mcp list
 wow:
   cdp-url: http://localhost:9222
   page-url-contains: lasthavens.com/play
+  # bot-js-path: /абсолютный/путь/к/bot.js   # по умолчанию не задан — скрипт из classpath
 ```
 
 Можно переопределить без пересборки, например:
@@ -107,6 +123,27 @@ wow:
 ```bash
 java -jar target/wow-mcp.jar --wow.cdp-url=http://localhost:9333
 ```
+
+### Живая правка bot.js
+
+По умолчанию `bot.js` берётся из classpath (внутри jar), поэтому после его правки
+нужна пересборка. Чтобы обойтись без неё, задай абсолютный путь к файлу:
+
+```bash
+java -Dwow.bot-js-path=/Users/vadim/Downloads/wow-mcp/src/main/resources/bot.js \
+     -jar target/wow-mcp.jar
+```
+
+или в `opencode.json` (см. раздел «Подключение в OpenCode»):
+
+```json
+"command": ["java", "-Dwow.bot-js-path=/Users/vadim/Downloads/wow-mcp/src/main/resources/bot.js",
+            "-jar", "/Users/vadim/Downloads/wow-mcp/target/wow-mcp.jar"]
+```
+
+Тогда `reload_bot` читает файл с диска при каждом вызове: правишь `bot.js`,
+вызываешь `reload_bot` — и страницу игры перезагружать не нужно. Старый бот перед
+удалением останавливается и отпускает клавиши.
 
 Для stdio-режима критично, чтобы в stdout не попадало ничего, кроме протокола MCP:
 

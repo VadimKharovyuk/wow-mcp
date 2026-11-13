@@ -99,6 +99,16 @@ public class WowTools {
         return jsonResult(bridge.stop());
     }
 
+    @Tool(name = "reload_bot", description = """
+            Перезагружает bot.js прямо в открытой странице игры, без её перезагрузки: \
+            останавливает старого бота, удаляет window.bot и заново загружает скрипт, \
+            после чего повторяет Lua-подготовку и поиск таблицы. Если задано свойство \
+            wow.bot-js-path, скрипт читается с диска при каждом вызове — пересборка не нужна; \
+            иначе берётся из classpath.""")
+    public String reloadBot() {
+        return jsonResult(bridge.reloadBot());
+    }
+
     private static boolean isRunning(String report) {
         try {
             GameState.Job job = GameState.parse(report).job();
