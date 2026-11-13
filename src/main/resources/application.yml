@@ -1,0 +1,23 @@
+spring:
+  application:
+    name: wow-mcp
+  main:
+    # Это stdio MCP-сервер: никакого веб-сервера и баннера в stdout.
+    web-application-type: none
+    banner-mode: "off"
+  ai:
+    mcp:
+      server:
+        name: wow-mcp
+        version: 0.0.1
+        stdio: true
+        type: SYNC
+        instructions: >-
+          Управление персонажем в LastHavens (WoW 3.3.5 в браузере).
+          Начинай с get_state, затем используй go_to/move_to/fight/rest
+          и wait_job для ожидания результата. Координаты — в диапазоне 0–100.
+
+wow:
+  # Chrome должен быть запущен с --remote-debugging-port=9222
+  cdp-url: http://localhost:9222
+  page-url-contains: lasthavens.com/play
