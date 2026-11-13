@@ -44,12 +44,13 @@ for (let n = 1; n <= 9; n++) KEYS[n] = ['Digit' + n, '' + n, 48 + n];
 window.bot = {
   addr: null, stride: 0, held: {}, running: false,
 
-  // ---- РОТАЦИЯ: заполни под своего персонажа ----
-  // key — клавиша на панели, cd — перезарядка (мс), maxHpPct — только если HP ниже этой доли
+  // ---- РОТАЦИЯ: приоритетный список слотов панели 1–9 ----
+  // Готовность умений берём из маски B[13] (state().ready), а не из таймеров.
+  // maxHpPct — применять умение, только если HP ниже этой доли.
   rotation: [
-    { key: '3', cd: 30000, maxHpPct: 0.4 },  // пример: лечение/защита, если HP < 40%
-    { key: '2', cd: 8000 },                  // пример: удар с перезарядкой
-    { key: '1', cd: 0 },                     // основной удар
+    { key: '3', maxHpPct: 0.4 },  // лечение/защита, если HP < 40%
+    { key: '2' },                // удар с перезарядкой
+    { key: '1' },                // основной удар
   ],
 
   mem() { return new Float64Array(wasmMemory.buffer); },
@@ -75,7 +76,8 @@ window.bot = {
     return {
       x: +(g(2) * 100).toFixed(2), y: +(g(3) * 100).toFixed(2), facing: +g(4).toFixed(2),
       hp: g(5), hpMax: g(6), fight: g(7) === 1, time: +g(8).toFixed(1),
-      target: g(9) === 1, targetHp: g(10), enemy: g(11) === 1
+      target: g(9) === 1, targetHp: g(10), enemy: g(11) === 1,
+      ready: g(12), err: g(13), errTime: +g(14).toFixed(2), moDead: g(15) === 1, lootN: g(16)
     };
   },
 
@@ -87,15 +89,16 @@ window.bot = {
     this.held[k] = down;
   },
   async tap(k) { this.key(k, true); await sleep(60); this.key(k, false); },
+  async hold(keys, ms) {
+    keys = [].concat(keys);
+    keys.forEach(k => this.key(k, true)); await sleep(ms); keys.forEach(k => this.key(k, false));
+  },
   stop() { this.running = false; for (const k in this.held) this.key(k, false); },
 
   // бег к точке (координаты зоны 0–100); останавливается при бое
   // обход препятствий: прыжок, затем шаг назад + поворот + пробежка в сторону
   async moveTo(tx, ty, { tol = 0.3, timeout = 90000 } = {}) {
     const norm = a => Math.atan2(Math.sin(a), Math.cos(a));
-    const hold = async (keys, ms) => {
-      keys.forEach(k => this.key(k, true)); await sleep(ms); keys.forEach(k => this.key(k, false));
-    };
     this.running = true;
     let stuck = 0, side = 1, last = this.state(), lastMove = Date.now();
     const t0 = Date.now();
@@ -123,9 +126,9 @@ window.bot = {
         if (stuck === 1) {
           await this.tap('SPACE');                       // сначала просто прыжок (низкий забор, камень)
         } else {
-          await hold(['S'], 600);                        // шаг назад
-          await hold([side > 0 ? 'A' : 'D'], 400 + 150 * stuck);   // поворот ~70–180°
-          await hold(['W'], 1500 + 300 * stuck);         // пробежать в сторону
+          await this.hold(['S'], 600);                   // шаг назад
+          await this.hold([side > 0 ? 'A' : 'D'], 400 + 150 * stuck);   // поворот ~70–180°
+          await this.hold(['W'], 1500 + 300 * stuck);    // пробежать в сторону
           if (stuck % 2 === 1) side = -side;             // чередовать лево/право
         }
         last = this.state(); lastMove = Date.now();
@@ -137,19 +140,64 @@ window.bot = {
 
   async fight({ fleeAt = 0.2, timeout = 90000 } = {}) {
     this.running = true;
-    const last = {}, t0 = Date.now();
+    const t0 = Date.now();
+    let lastPress = 0, handledErr = 0, turns = 0;
     while (this.running) {
       const s = this.state(), hpPct = s.hp / s.hpMax;
       if (!s.fight && (!s.target || s.targetHp === 0)) return { result: 'бой окончен', ...s };
       if (hpPct < fleeAt) { this.stop(); return { result: 'мало HP — нужен выбор', ...s }; }
       if (Date.now() - t0 > timeout) { this.stop(); return { result: 'бой слишком долгий', ...s }; }
+
       if (!s.target || !s.enemy || s.targetHp === 0) { await this.tap('TAB'); await sleep(300); continue; }
-      const r = this.rotation.find(r =>
-        Date.now() - (last[r.key] || 0) > r.cd && (!r.maxHpPct || hpPct < r.maxHpPct));
-      if (r) { await this.tap(r.key); last[r.key] = Date.now(); }
-      await sleep(1600); // глобальная перезарядка
+
+      // реакция на свежую ошибку, случившуюся после нашего нажатия
+      if (s.errTime > lastPress && s.errTime > handledErr) {
+        handledErr = s.errTime;
+        if (s.err === 1 && turns < 4) { await this.hold('A', 450); turns++; continue; }  // ~90° поворот
+        if (s.err === 2) { await this.hold('W', 500); continue; }                       // подойти ближе
+      }
+
+      const isReady = k => (s.ready >> (+k - 1)) & 1;
+      const r = this.rotation.find(r => isReady(r.key) && (!r.maxHpPct || hpPct < r.maxHpPct));
+      if (r) { await this.tap(r.key); lastPress = s.time; turns = 0; }
+      await sleep(250);
     }
     return { result: 'остановлен вручную', ...this.state() };
+  },
+
+  // ищем труп синтетической мышью по сетке точек экрана; Lua сообщает moDead
+  async loot({ timeout = 8000 } = {}) {
+    const c = CANVAS(), rect = () => c.getBoundingClientRect();
+    const mouse = (fx, fy, type, button = 0) => {
+      const r = rect();
+      c.dispatchEvent(new MouseEvent(type, {
+        clientX: r.left + fx * r.width, clientY: r.top + fy * r.height,
+        button, buttons: type === 'mousedown' ? (button === 2 ? 2 : 1) : 0, bubbles: true
+      }));
+    };
+    const pts = [];
+    for (let fy = 0.45; fy <= 0.90; fy += 0.05)
+      for (let fx = 0.25; fx <= 0.75; fx += 0.04) pts.push([fx, fy]);
+    pts.sort((a, b) => Math.hypot(a[0] - 0.5, a[1] - 0.7) - Math.hypot(b[0] - 0.5, b[1] - 0.7));
+
+    for (const [fx, fy] of pts) {
+      if (!this.running && this.job.status !== 'running') break;
+      mouse(fx, fy, 'mousemove');
+      await sleep(70);
+      if (this.state().moDead) {
+        mouse(fx, fy, 'mousedown', 2); await sleep(60); mouse(fx, fy, 'mouseup', 2);
+        const t0 = Date.now();
+        while (Date.now() - t0 < timeout) {          // ждём: подбежал, окно открылось и закрылось
+          await sleep(400);
+          const s = this.state();
+          if (s.fight) return { result: 'бой во время сбора', ...s };
+          if (Date.now() - t0 > 1500 && s.lootN === 0) return { result: 'добыча собрана', point: [fx, fy], ...s };
+        }
+        const s = this.state();
+        return { result: s.lootN > 0 ? 'окно добычи не закрылось (сумки полные?)' : 'не удалось открыть труп', ...s };
+      }
+    }
+    return { result: 'труп не найден под курсором', ...this.state() };
   },
 
   async rest({ until = 0.8, foodKey = null, timeout = 60000 } = {}) {
@@ -164,13 +212,20 @@ window.bot = {
     return { result: 'отдых: таймаут', ...this.state() };
   },
 
-  // дойти до точки, по пути отбиваясь
-  async go(x, y) {
+  // дойти до точки, по пути отбиваясь; после боя при autoLoot собираем добычу
+  async go(x, y, { autoLoot = true } = {}) {
     for (let i = 0; i < 10; i++) {
       const r = await this.moveTo(x, y);
       if (r.result !== 'бой') return r;
       const f = await this.fight();
       if (f.result !== 'бой окончен') return f;
+      if (autoLoot) {
+        const l = await this.loot();
+        if (l.result === 'бой во время сбора') {
+          const f2 = await this.fight();
+          if (f2.result !== 'бой окончен') return f2;
+        }
+      }
     }
     return { result: 'слишком много боёв по пути', ...this.state() };
   },
