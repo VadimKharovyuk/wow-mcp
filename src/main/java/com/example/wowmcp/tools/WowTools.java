@@ -59,6 +59,21 @@ public class WowTools {
         return bridge.report();
     }
 
+    @Tool(name = "spells", description = """
+            Показывает заклинания на панелях: spellId, nameHash, слот, привязанная клавиша, \
+            готовность и наличие дальности. Название можно узнать в игре через \
+            /run print(GetSpellInfo(<spellId>)).""")
+    public String spells() {
+        bridge.ensureReady();
+        Object raw = bridge.eval("() => JSON.stringify(bot.spells())");
+        try {
+            return JSON.writeValueAsString(Map.of(
+                    "spells", JSON.readValue(String.valueOf(raw), Object.class)));
+        } catch (RuntimeException e) {
+            return JSON.writeValueAsString(Map.of("spells", raw));
+        }
+    }
+
     @Tool(name = "go_to", description = """
             Бежать к точке (x, y в координатах зоны 0–100), по пути отбиваясь от мобов, \
             а после боя собирая добычу (autoLoot). Запускается в фоне и сразу возвращает \
@@ -258,15 +273,18 @@ public class WowTools {
     }
 
     @Tool(name = "set_rotation", description = """
-            Задать приоритет умений: список слотов панели 1–9 от самого важного к основному удару. \
-            Формат: JSON-массив [{"key":"2","maxHpPct":0.35},{"key":"4","waitAfter":{"key":"2","ms":1000}}]. \
+            Задать приоритет умений: список от самого важного к основному удару. \
+            Поддерживаются v1 (по слоту панели, key "1".."9") и v2 (по nameHash заклинания, spell). \
+            Формат: JSON-массив [{"key":"2","maxHpPct":0.35},{"key":"4","waitAfter":{"key":"2","ms":1000}}] \
+            или [{"spell":123,"maxHpPct":0.35},{"spell":456,"waitAfter":{"spell":123,"ms":1000}}]. \
             maxHpPct необязателен (0..1): умение применяется, только если HP ниже этой доли. \
             outOfCombatOnly (true/false) — умение только вне боя. \
-            waitAfter {key, ms} — не переходить к следующим умениям, пока с нажатия key прошло меньше ms.""")
+            waitAfter {key|spell, ms} — не переходить к следующим умениям, пока с нажатия прошло меньше ms.""")
     public String setRotation(
             @ToolParam(description = "JSON-массив вида [{\"key\":\"2\",\"maxHpPct\":0.35},"
                     + "{\"key\":\"4\",\"maxHpPct\":0.35,\"waitAfter\":{\"key\":\"2\",\"ms\":1000}},"
-                    + "{\"key\":\"3\",\"outOfCombatOnly\":true},{\"key\":\"1\"}]")
+                    + "{\"key\":\"3\",\"outOfCombatOnly\":true},{\"key\":\"1\"}] или "
+                    + "[{\"spell\":123,\"maxHpPct\":0.35},{\"spell\":456,\"waitAfter\":{\"spell\":123,\"ms\":1000}}]")
             String rotationJson) {
         List<Map<String, Object>> rotation = parseRotation(rotationJson);
         bridge.ensureReady();
@@ -289,11 +307,44 @@ public class WowTools {
         } catch (RuntimeException ignored) {
         }
         Map<String, Object> result = new LinkedHashMap<>();
+        List<Object> rotationList;
         try {
-            result.put("rotation", JSON.readValue(String.valueOf(rotation), Object.class));
+            rotationList = JSON.readValue(String.valueOf(rotation), new tools.jackson.core.type.TypeReference<>() {});
         } catch (RuntimeException e) {
             result.put("rotation", rotation);
+            rotationList = null;
         }
+        if (rotationList != null) {
+            List<Object> spellList;
+            try {
+                Object rawSpells = bridge.eval("() => JSON.stringify(bot.spells())");
+                spellList = JSON.readValue(String.valueOf(rawSpells), new tools.jackson.core.type.TypeReference<>() {});
+            } catch (RuntimeException e) {
+                spellList = List.of();
+            }
+            Map<Integer, Map<String, Object>> byHash = new LinkedHashMap<>();
+            for (Object o : spellList) {
+                if (o instanceof Map<?, ?> m && m.get("nameHash") instanceof Number n) {
+                    byHash.put(n.intValue(), (Map<String, Object>) m);
+                }
+            }
+            for (Object o : rotationList) {
+                if (!(o instanceof Map<?, ?> rule)) continue;
+                Object spellValue = rule.get("spell");
+                if (spellValue instanceof Number n) {
+                    Map<String, Object> info = byHash.get(n.intValue());
+                    if (info != null) {
+                        Map<String, Object> copy = new LinkedHashMap<>((Map<String, Object>) rule);
+                        copy.put("slot", info.get("slot"));
+                        copy.put("keyCode", info.get("keyCode"));
+                        copy.put("mods", info.get("mods"));
+                        // вернём правило с обогащёнными полями
+                        rotationList.set(rotationList.indexOf(o), copy);
+                    }
+                }
+            }
+        }
+        result.put("rotation", rotationList);
         result.put("profile", "null".equals(profile) ? null : profile);
         if (db.isEnabled() && profile != null && !"null".equals(profile)) {
             Map<String, Object> row = db.loadRotationProfile(profile);
@@ -440,22 +491,34 @@ public class WowTools {
         }
 
         List<Map<String, Object>> rotation = new ArrayList<>();
-        Set<String> usedKeys = new HashSet<>();
+        Set<String> usedIdentities = new HashSet<>();
         for (int i = 0; i < items.size(); i++) {
             int position = i + 1;
             if (!(items.get(i) instanceof Map<?, ?> item)) {
                 throw new IllegalArgumentException(
-                        "Элемент #" + position + " должен быть объектом с полем key ('1'..'9')");
-            }
-
-            Object keyValue = item.get("key");
-            String key = slotKey(keyValue, "key", position);
-            if (!usedKeys.add(key)) {
-                throw new IllegalArgumentException("Слот " + key + " указан в ротации больше одного раза");
+                        "Элемент #" + position + " должен быть объектом с полем key ('1'..'9') или spell (nameHash)");
             }
 
             Map<String, Object> entry = new LinkedHashMap<>();
-            entry.put("key", key);
+            Object spellValue = item.get("spell");
+            Object keyValue = item.get("key");
+            if (spellValue != null) {
+                if (!(spellValue instanceof Number spellNumber) || spellNumber.doubleValue() != Math.rint(spellNumber.doubleValue())) {
+                    throw new IllegalArgumentException(
+                            "Элемент #" + position + ": spell должен быть целым nameHash, получено: " + spellValue);
+                }
+                int spell = spellNumber.intValue();
+                if (!usedIdentities.add("spell:" + spell)) {
+                    throw new IllegalArgumentException("Заклинание (nameHash " + spell + ") указано в ротации больше одного раза");
+                }
+                entry.put("spell", spell);
+            } else {
+                String key = slotKey(keyValue, "key", position);
+                if (!usedIdentities.add("key:" + key)) {
+                    throw new IllegalArgumentException("Слот " + key + " указан в ротации больше одного раза");
+                }
+                entry.put("key", key);
+            }
 
             Object maxHpPctValue = item.get("maxHpPct");
             if (maxHpPctValue != null) {
@@ -490,9 +553,6 @@ public class WowTools {
                             "Элемент #" + position + ": waitAfter должен быть объектом {key, ms}, получено: "
                                     + waitAfterValue);
                 }
-                Object waitKeyValue = waitAfter.get("key");
-                String waitKey = slotKey(waitKeyValue, "waitAfter.key", position);
-
                 Object waitMsValue = waitAfter.get("ms");
                 if (!(waitMsValue instanceof Number msNumber)) {
                     throw new IllegalArgumentException(
@@ -505,7 +565,21 @@ public class WowTools {
                             "Элемент #" + position + ": waitAfter.ms должен быть целым числом от 0 до 10000, "
                                     + "получено: " + waitMsValue);
                 }
-                entry.put("waitAfter", Map.of("key", waitKey, "ms", (long) waitMs));
+                Object waitSpellValue = waitAfter.get("spell");
+                Map<String, Object> waitAfterEntry = new LinkedHashMap<>();
+                if (waitSpellValue != null) {
+                    if (!(waitSpellValue instanceof Number ws) || ws.doubleValue() != Math.rint(ws.doubleValue())) {
+                        throw new IllegalArgumentException(
+                                "Элемент #" + position + ": waitAfter.spell должен быть целым nameHash, получено: "
+                                        + waitSpellValue);
+                    }
+                    waitAfterEntry.put("spell", ws.intValue());
+                } else {
+                    String waitKey = slotKey(waitAfter.get("key"), "waitAfter.key", position);
+                    waitAfterEntry.put("key", waitKey);
+                }
+                waitAfterEntry.put("ms", (int) waitMs);
+                entry.put("waitAfter", waitAfterEntry);
             }
 
             rotation.add(entry);

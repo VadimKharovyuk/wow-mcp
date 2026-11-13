@@ -105,6 +105,25 @@ public class DbService {
                   last_used_at  timestamptz NOT NULL,
                   stats_json    text
                 )""");
+        jdbc.execute("""
+                CREATE TABLE IF NOT EXISTS spell_cast (
+                  id           bigserial PRIMARY KEY,
+                  profile      varchar(40) NOT NULL,
+                  name_hash    int         NOT NULL,
+                  spell_id     int,
+                  hp           real,
+                  mana         real,
+                  fight        boolean,
+                  target       boolean,
+                  target_hp_pct real,
+                  ready_spells int[],
+                  since_fight_ms int,
+                  prev_spell   int,
+                  prev_spell_ms int,
+                  cast_at      timestamptz NOT NULL
+                )""");
+        jdbc.execute("CREATE INDEX IF NOT EXISTS spell_cast_profile_idx ON spell_cast (profile, cast_at)");
+        jdbc.execute("CREATE INDEX IF NOT EXISTS spell_cast_name_hash_idx ON spell_cast (name_hash)");
     }
 
     public boolean isEnabled() {
@@ -192,6 +211,46 @@ public class DbService {
         } catch (Exception e) {
             log.warn("Не удалось записать нажатие: {}", e.getMessage());
             disable();
+        }
+    }
+
+    public void insertSpellCast(String profile, int nameHash, Integer spellId, Double hp, Double mana, Boolean fight,
+                                Boolean target, Double targetHpPct, List<Integer> readySpells, Integer sinceFightMs,
+                                Integer prevSpell, Integer prevSpellMs, long atMillis) {
+        if (!enabled) return;
+        try {
+            java.sql.Array readyArray = null;
+            if (readySpells != null && !readySpells.isEmpty()) {
+                java.sql.Connection conn = jdbc.getDataSource().getConnection();
+                try {
+                    readyArray = conn.createArrayOf("int4", readySpells.toArray(new Integer[0]));
+                } finally {
+                    conn.close();
+                }
+            }
+            jdbc.update(
+                    "INSERT INTO spell_cast (profile,name_hash,spell_id,hp,mana,fight,target,target_hp_pct,ready_spells,since_fight_ms,prev_spell,prev_spell_ms,cast_at) "
+                            + "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                    profile, nameHash, spellId, hp, mana, fight, target, targetHpPct, readyArray, sinceFightMs, prevSpell,
+                    prevSpellMs, new Timestamp(atMillis));
+        } catch (Exception e) {
+            log.warn("Не удалось записать применение заклинания: {}", e.getMessage());
+            disable();
+        }
+    }
+
+    /** Применения заклинаний профиля за последние 14 дней. */
+    public List<Map<String, Object>> querySpellCasts(String profile) {
+        if (!enabled || profile == null) return List.of();
+        try {
+            return jdbc.queryForList(
+                    "SELECT name_hash, spell_id, hp, mana, fight, target, target_hp_pct, ready_spells, "
+                            + "since_fight_ms, prev_spell, prev_spell_ms, cast_at "
+                            + "FROM spell_cast WHERE profile = ? AND cast_at >= (now() - interval '14 days') ORDER BY cast_at",
+                    profile);
+        } catch (Exception e) {
+            log.warn("Не удалось прочитать применения заклинаний: {}", e.getMessage());
+            return List.of();
         }
     }
 

@@ -16,15 +16,16 @@ Object.assign(bot, {
 
       if (!s.target || !s.enemy || s.targetHp === 0) { await this.tap('TAB'); await sleep(300); continue; }
 
-      const isReady = k => (s.ready >> (+k - 1)) & 1;
+      const isReadyKey = k => (s.ready >> (+k - 1)) & 1;
+      const spellRec = h => (this.spells() || []).find(r => r.nameHash === h);
       const now = Date.now();
       this.lastKey = this.lastKey || {};
+      this.lastSpellAt = this.lastSpellAt || {};
 
       // реакция на свежую ошибку, случившуюся после нашего нажатия
       if (s.errTime > lastPress && s.errTime > handledErr) {
         handledErr = s.errTime;
         if (s.err === 1 && turns < 4) { await this.hold('A', 450); turns++; continue; }  // ~90° поворот
-        // не двигаемся сразу после 4 — иначе собьём чтение лечения
         if (s.err === 2 && now - (this.lastKey['4'] || 0) > HEAL_CAST_LOCK_MS) {
           await this.hold('W', 500); continue;                                           // подойти ближе
         }
@@ -32,15 +33,35 @@ Object.assign(bot, {
 
       let pick = null;
       for (const r of this.rotation) {
-        if (!isReady(r.key)) continue;
+        // --- v2: заклинание по хешу названия ---
+        if (r.spell) {
+          const rec = spellRec(r.spell);
+          if (!rec || rec.ready !== 1 || rec.inRange === 0) continue;
+          if (r.maxHpPct && hpPct >= r.maxHpPct) continue;
+          if (r.outOfCombatOnly && s.fight) continue;
+          if (r.waitAfter) {
+            const ref = r.waitAfter.spell ? (this.lastSpellAt[r.waitAfter.spell] || 0) : (this.lastKey[r.waitAfter.key] || 0);
+            if (now - ref < (r.waitAfter.ms || 0)) { pick = 'wait'; break; }
+          }
+          pick = r; break;
+        }
+        // --- v1: слот по клавише ---
+        if (!isReadyKey(r.key)) continue;
         if (r.maxHpPct && hpPct >= r.maxHpPct) continue;
         if (r.outOfCombatOnly && s.fight) continue;
-        if (r.waitAfter && now - (this.lastKey[r.waitAfter.key] || 0) < r.waitAfter.ms) { pick = 'wait'; break; }
+        if (r.waitAfter) {
+          const ref = r.waitAfter.spell ? (this.lastSpellAt[r.waitAfter.spell] || 0) : (this.lastKey[r.waitAfter.key] || 0);
+          if (now - ref < (r.waitAfter.ms || 0)) { pick = 'wait'; break; }
+        }
         pick = r; break;
       }
       if (pick && pick !== 'wait') {
-        await this.tap(pick.key);
-        this.lastKey[pick.key] = Date.now();
+        if (pick.spell) {
+          await this.pressSpell(pick.spell);
+        } else {
+          await this.tap(pick.key);
+          this.lastKey[pick.key] = Date.now();
+        }
         lastPress = s.time; turns = 0;
       }
       await sleep(250);
@@ -49,7 +70,7 @@ Object.assign(bot, {
   },
 
   async rest({ hpUntil = 0.8, manaUntil = 0.9, manaBelow = 0.3,
-                healKey = '4', drinkKey = '0', timeout = 60000 } = {}) {
+                healKey = '7', healSpell = null, drinkKey = '0', timeout = 60000 } = {}) {
     const t0 = Date.now();
     const isReady = (s, k) => (s.ready >> (+k - 1)) & 1;
     let s = this.state();
@@ -65,12 +86,18 @@ Object.assign(bot, {
       }
     }
     // 2) лечение заклинанием (до 3 раз)
-    for (let i = 0; i < 3 && healKey; i++) {
+    for (let i = 0; i < 3 && (healSpell || healKey); i++) {
       s = this.state();
       if (s.fight) return bail('бой во время отдыха');
       if (s.hp / s.hpMax >= hpUntil || s.manaPct < 0.15) break;
-      if (!isReady(s, healKey)) { await sleep(500); continue; }
-      await this.tap(healKey);
+      if (healSpell) {
+        const rec = (this.spells() || []).find(r => r.nameHash === healSpell);
+        if (!rec || rec.ready !== 1 || rec.inRange === 0) { await sleep(500); continue; }
+        await this.pressSpell(healSpell);
+      } else {
+        if (!isReady(s, healKey)) { await sleep(500); continue; }
+        await this.tap(healKey);
+      }
       await sleep(3000);                       // время чтения заклинания
     }
     // 3) добрать естественным отдыхом

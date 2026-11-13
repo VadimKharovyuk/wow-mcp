@@ -49,10 +49,8 @@ public class GameBridge implements AutoCloseable {
     private static final String BOT_MANIFEST_RESOURCE = "bot/manifest.txt";
     private static final String BOT_MODULE_PREFIX = "bot/";
     private static final String BOT_MODULE_JOINER = ";\n";
-    /** Версия Lua-части: (hashCode содержимого lua-setup.txt) & 0xFFFFF. */
-    private static final int LUA_VERSION = (readResource("lua-setup.txt").hashCode() & 0xFFFFF);
-
-    private static final List<String> LUA_SETUP = buildLuaSetup();
+    // LUA_VERSION и LUA_SETUP теперь вычисляются динамически (см. luaVersion()/readLuaSetupLines()),
+    // чтобы поддерживать режим разработки wow.lua-dir.
 
     private static final long LUA_LINE_PAUSE_MS = 300;
     private static final long STATE_TIME_WINDOW_MS = 1000;
@@ -374,7 +372,7 @@ public class GameBridge implements AutoCloseable {
         if (!isAddrUnset()) {
             Object v = page.evaluate("() => window.bot.state().luaVer");
             int ver = (v instanceof Number n) ? n.intValue() : -1;
-            if (ver == LUA_VERSION && isStateTimeAlive(deadline)) {
+            if (ver == luaVersion() && isStateTimeAlive(deadline)) {
                 log.info("Lua-таблица уже в игре (версия {}) — подготовка пропущена", ver);
                 consecutiveLuaFailures = 0;
                 if (injected) {
@@ -490,7 +488,7 @@ public class GameBridge implements AutoCloseable {
         int secs = (int) (READY_TIMEOUT_MS / 1000);
         if (ticked) {
             return new IllegalStateException(
-                    "Lua-подготовка не успела за " + secs + " с (строк: " + LUA_SETUP.size() + ")");
+                    "Lua-подготовка не успела за " + secs + " с");
         }
         return new IllegalStateException(READY_TIMEOUT_MESSAGE);
     }
@@ -650,9 +648,10 @@ public class GameBridge implements AutoCloseable {
      * бросаем {@link #READY_TIMEOUT_MESSAGE}, а не висим.
      */
     private void runLuaSetup(long attemptDeadline) {
-        log.info("Выполняю Lua-подготовку ({} строк)", LUA_SETUP.size());
+        List<String> luaSetup = readLuaSetupLines();
+        log.info("Выполняю Lua-подготовку ({} строк)", luaSetup.size());
         page.evaluate("() => { const c = document.getElementById('canvas'); if (c) c.focus(); }");
-        for (String line : LUA_SETUP) {
+        for (String line : luaSetup) {
             long remaining = remainingMs(attemptDeadline);
             if (remaining <= 0) {
                 throw readyTimeout();
@@ -749,11 +748,65 @@ public class GameBridge implements AutoCloseable {
                 .toList();
     }
 
-    /** Модули Lua-подготовки + строка с версией (чтобы Java могла проверить, что таблица в игре актуальна). */
-    private static List<String> buildLuaSetup() {
+    /** Собирает строки Lua-подготовки: старые однострочники + новые многострочные lua/*.lua (чанками) + версия. */
+    private List<String> readLuaSetupLines() {
         List<String> lines = new ArrayList<>(readResourceLines("lua-setup.txt"));
-        lines.add("/run B[30]=" + LUA_VERSION);
+        String combined = readLuaModulesCombined(properties.luaDir());
+        if (!combined.isEmpty()) {
+            if (combined.indexOf('|') >= 0) {
+                throw new IllegalStateException("В Lua-исходниках найден символ '|': он экранируется чатом WoW, используй 'or' или string.char(124)");
+            }
+            int chunkSize = 200;
+            for (int i = 0; i < combined.length(); i += chunkSize) {
+                String chunk = combined.substring(i, Math.min(i + chunkSize, combined.length()));
+                lines.add("/run _L=(_L or \"\")..[==[" + chunk + "]==]");
+            }
+            lines.add("/run local f,e=loadstring(_L) _L=nil if f then f() else print(\"LUA ERR\",e) end");
+        }
+        lines.add("/run B[30]=" + luaVersion());
         return List.copyOf(lines);
+    }
+
+    /** Конкатенирует содержимое lua-модулей (classpath или диск). */
+    private String readLuaModulesCombined(String dir) {
+        List<String> modules = readLuaModuleNames(dir);
+        StringBuilder sb = new StringBuilder();
+        for (String module : modules) {
+            if (module.contains("..") || module.contains("/") || module.contains("\\")) {
+                throw new IllegalStateException("Недопустимое имя модуля в lua/manifest.txt: " + module);
+            }
+            String source = (dir == null)
+                    ? readResource("lua/" + module)
+                    : readFile(Path.of(dir, module));
+            if (!sb.isEmpty()) {
+                sb.append("\n");
+            }
+            sb.append(source);
+        }
+        return sb.toString();
+    }
+
+    /** Список имён lua-модулей из manifest.txt (classpath или диск). Если манифеста нет — пустой список. */
+    private List<String> readLuaModuleNames(String dir) {
+        String manifest;
+        try {
+            manifest = (dir == null)
+                    ? readResource("lua/manifest.txt")
+                    : readFile(Path.of(dir, "manifest.txt"));
+        } catch (RuntimeException e) {
+            return List.of();
+        }
+        return manifest.lines()
+                .map(String::strip)
+                .filter(line -> !line.isEmpty() && !line.startsWith("#"))
+                .toList();
+    }
+
+    /** Хеш всех Lua-источников (lua-setup.txt + lua/*.lua). */
+    private int luaVersion() {
+        StringBuilder sb = new StringBuilder(readResource("lua-setup.txt"));
+        sb.append(readLuaModulesCombined(properties.luaDir()));
+        return sb.toString().hashCode() & 0xFFFFF;
     }
 
     @PreDestroy

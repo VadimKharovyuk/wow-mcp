@@ -9,6 +9,7 @@ import org.springframework.stereotype.Component;
 import tools.jackson.core.type.TypeReference;
 import tools.jackson.databind.ObjectMapper;
 
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -49,7 +50,7 @@ public class EventCollector {
             log.warn("Не удалось разобрать события: {}", e.getMessage());
             return;
         }
-        int kills = 0, paths = 0, keys = 0;
+        int kills = 0, paths = 0, keys = 0, casts = 0;
         String lastProfile = null;
         for (Map<String, Object> ev : events) {
             String type = String.valueOf(ev.get("type"));
@@ -62,6 +63,34 @@ public class EventCollector {
                             asInt(ev.get("ready")), asBool(ev.get("fight")), asBool(ev.get("target")),
                             asDouble(ev.get("targetHpPct")), asInt(ev.get("sinceFightMs")), str(ev.get("prevKey")),
                             asInt(ev.get("prevKeyMs")), asLong(ev.get("at")));
+                }
+            } else if ("cast".equals(type)) {
+                casts++;
+                if (db.isEnabled()) {
+                    String profile = str(ev.get("profile"));
+                    lastProfile = profile;
+                    Integer nameHash = asInt(ev.get("spellId")); // JS кладёт spellId = nameHash
+                    Integer spellId = null;
+                    Double hp = asDouble(ev.get("hp"));
+                    Double mana = asDouble(ev.get("mana"));
+                    Boolean fight = asBool(ev.get("fight"));
+                    Boolean target = asBool(ev.get("target"));
+                    Double targetHpPct = asDouble(ev.get("targetHpPct"));
+                    List<Integer> readySpells = new ArrayList<>();
+                    Object rs = ev.get("readySpells");
+                    if (rs instanceof List<?> list) {
+                        for (Object o : list) {
+                            Integer v = asInt(o);
+                            if (v != null) readySpells.add(v);
+                        }
+                    }
+                    Integer sinceFightMs = asInt(ev.get("sinceFightMs"));
+                    Integer prevSpell = asInt(ev.get("prevSpell"));
+                    Integer prevSpellMs = asInt(ev.get("prevSpellMs"));
+                    long at = asLong(ev.get("at"));
+                    db.insertSpellCast(profile, nameHash == null ? 0 : nameHash, spellId, hp, mana, fight, target,
+                            targetHpPct, readySpells, sinceFightMs, prevSpell, prevSpellMs,
+                            at == 0 ? System.currentTimeMillis() : at);
                 }
             } else if ("kill".equals(type)) {
                 kills++;
@@ -89,18 +118,23 @@ public class EventCollector {
                 }
             }
         }
-        if (kills + paths + keys > 0) {
-            log.debug("Собрано событий: kills={}, paths={}, keys={}", kills, paths, keys);
+        if (kills + paths + keys + casts > 0) {
+            log.debug("Собрано событий: kills={}, paths={}, keys={}, casts={}", kills, paths, keys, casts);
         }
 
-        // Автообучение: если профиль активен и накопилось >=40 новых нажатий
+        // Автообучение: если профиль активен и накопилось >=40 новых нажатий/применений
         if (db.isEnabled() && lastProfile != null) {
             try {
                 String activeProfile = String.valueOf(bridge.eval("() => bot.profile"));
                 if (lastProfile.equals(activeProfile)) {
-                    int total = db.queryKeyPresses(lastProfile).size();
+                    int total = db.querySpellCasts(lastProfile).size();
+                    if (total == 0) {
+                        total = db.queryKeyPresses(lastProfile).size();
+                    }
                     if (total - learner.lastLearnedCount(lastProfile) >= 40) {
-                        RotationLearner.Result res = learner.learn(lastProfile);
+                        RotationLearner.Result res = db.querySpellCasts(lastProfile).isEmpty()
+                                ? learner.learn(lastProfile)
+                                : learner.learnSpells(lastProfile);
                         if (res != null) {
                             String rotJson = json.writeValueAsString(res.rotation());
                             bridge.eval("(r) => { bot.rotation = r; return 'ok'; }", res.rotation());

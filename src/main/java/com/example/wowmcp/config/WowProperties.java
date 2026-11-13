@@ -11,7 +11,7 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
  *                        если не задан, модули берутся из classpath
  */
 @ConfigurationProperties(prefix = "wow")
-public record WowProperties(String cdpUrl, String pageUrlContains, String botJsDir, Db db) {
+public record WowProperties(String cdpUrl, String pageUrlContains, String botJsDir, String luaDir, Db db) {
 
     public record Db(String url, String username, String password) {
         public Db {
@@ -30,6 +30,9 @@ public record WowProperties(String cdpUrl, String pageUrlContains, String botJsD
         }
         if (botJsDir != null && botJsDir.isBlank()) {
             botJsDir = null;
+        }
+        if (luaDir != null && luaDir.isBlank()) {
+            luaDir = null;
         }
         if (db == null) {
             db = new Db(null, null, "");

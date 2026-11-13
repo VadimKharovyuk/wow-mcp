@@ -2,7 +2,7 @@
 Object.assign(bot, {
   events: [], lastKills: null, lastTLvl: null, recording: false, recSession: null, lastPathPt: null,
   profile: null, keyLogger: null, fightStartedAt: null, lastHumanKey: null,
-  lastBotPressAt: 0, lastUseCount: null,
+  lastBotPressAt: 0, lastUseCount: null, lastCastCount: null,
 
   trackTick() {
     if (this.addr === null) return;
@@ -23,6 +23,29 @@ Object.assign(bot, {
       }
     }
     // Отслеживание нажатий умений через игру (UseAction hook): рост useCount.
+    // Отслеживание применений заклинаний (через Lua-событие UNIT_SPELLCAST_SUCCEEDED).
+    if (this.lastCastCount === null) this.lastCastCount = this.castInfo ? this.castInfo().count : 0;
+    const ci = this.castInfo ? this.castInfo() : { count: 0, lastSpell: 0 };
+    if (ci.count > this.lastCastCount) {
+      const now = Date.now();
+      const isBot = this.grinding || this.job.status === 'running' || (now - (this.lastBotPressAt || 0)) < 3000;
+      if (!isBot && this.profile) {
+        const readySpells = (this.spells() || []).filter(r => r.ready === 1).map(r => r.nameHash);
+        if (s.fight && !this.fightStartedAt) this.fightStartedAt = now;
+        if (!s.fight) this.fightStartedAt = null;
+        this.events.push({ type: 'cast', profile: this.profile, spellId: ci.lastSpell,
+          hp: +(s.hp / s.hpMax).toFixed(2), mana: s.manaPct, fight: s.fight,
+          target: s.target && s.enemy, targetHpPct: s.targetHpPct,
+          readySpells: readySpells,
+          sinceFightMs: this.fightStartedAt ? now - this.fightStartedAt : null,
+          prevSpell: this.lastCastSpell || null,
+          prevSpellMs: this.lastCastSpell ? now - (this.lastCastAt || now) : null, at: now });
+      }
+      this.lastCastSpell = ci.lastSpell;
+      this.lastCastAt = now;
+      this.lastCastCount = ci.count;
+    }
+
     if (this.lastUseCount === null) this.lastUseCount = s.useCount;
     if (s.useCount > this.lastUseCount) {
       const slot = s.useSlot;

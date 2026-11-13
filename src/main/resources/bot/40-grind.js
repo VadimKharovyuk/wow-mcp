@@ -7,7 +7,8 @@ Object.assign(bot, {
     restBelow: 0.6,     // отдыхать, если HP ниже 60%
     manaBelow: 0.3,    // отдыхать, если мана ниже 30%
     pullKey: '3',       // умение для агро издалека
-    healKey: '4',       // лечение заклинанием в отдыхе
+    healKey: '7',       // лечение заклинанием в отдыхе (v1)
+    healSpell: null,     // лечение заклинанием в отдыхе (v2, по хешу названия)
     drinkKey: '0',      // питьё в отдыхе
     maxKills: 10,       // 0 = без лимита
     maxMinutes: 30,
@@ -88,7 +89,7 @@ Object.assign(bot, {
         const p = await this.fightAndLoot(st); if (p) return out(p); continue;
       }
       if (s.hp / s.hpMax < cfg.restBelow || s.manaPct < cfg.manaBelow) {
-        await this.rest({ manaBelow: cfg.manaBelow, healKey: cfg.healKey, drinkKey: cfg.drinkKey });
+        await this.rest({ manaBelow: cfg.manaBelow, healKey: cfg.healKey, healSpell: cfg.healSpell, drinkKey: cfg.drinkKey });
         st.rests++; continue;
       }
       if (Math.hypot(s.x - anchor.x, s.y - anchor.y) > cfg.radius * 1.5) {   // ушли далеко — назад

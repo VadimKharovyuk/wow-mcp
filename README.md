@@ -176,6 +176,7 @@ wow:
   cdp-url: http://localhost:9222
   page-url-contains: lasthavens.com/play
   # bot-js-dir: /абсолютный/путь/к/bot   # каталог с модулями; по умолчанию — classpath
+  # lua-dir: /абсолютный/путь/к/lua      # каталог с Lua-модулями; по умолчанию — classpath
 ```
 
 Можно переопределить без пересборки, например:

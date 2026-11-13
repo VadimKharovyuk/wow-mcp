@@ -61,7 +61,7 @@ KEYS['0'] = KEYS[0];
 
 // ===== базовый объект бота =====
 window.bot = {
-  addr: null, stride: 0, held: {}, running: false, grinding: false,
+  addr: null, stride: 0, saddr: null, sstride: 0, held: {}, running: false, grinding: false, lastSpellAt: {}, warnings: [],
   lastKey: {}, grindStats: null,
   // ---- РОТАЦИЯ: приоритетный список слотов панели 1–9 ----
   // Готовность умений берём из маски B[13] (state().ready), а не из таймеров.
@@ -70,28 +70,40 @@ window.bot = {
   // waitAfter { key, ms } — не переходить к следующим умениям, пока с нажатия key
   // прошло меньше ms (чтобы удар не запустил ГКД раньше лечения).
   rotation: [
-    { key: '2', maxHpPct: 0.35 },                                    // стан при низком HP
-    { key: '4', maxHpPct: 0.35, waitAfter: { key: '2', ms: 1000 } }, // лечение через 1 с после стана
-    { key: '3', outOfCombatOnly: true },                             // агро издалека, начало боя
-    { key: '1' },                                                    // основной удар
+    { key: '9', maxHpPct: 0.15 },
+    { key: '4', maxHpPct: 0.35 },
+    { key: '7', maxHpPct: 0.35, waitAfter: { key: '4', ms: 1000 } },
+    { key: '8', maxHpPct: 0.25 },
+    { key: '3', outOfCombatOnly: true },
+    { key: '1' },
   ],
 
   mem() { return new Float64Array(wasmMemory.buffer); },
 
-  // найти Lua-таблицу B в памяти WASM по меткам 777001.5 / 777002.5
-  async find() {
+  async findTable(markA, markB, timeIndex) {
     const H = this.mem(), c = [];
     for (let i = 0; i < H.length - 60; i++)
-      if (H[i] === 777001.5)
-        for (let s = 1; s <= 4; s++) if (H[i + s] === 777002.5) c.push([i, s]);
-    const t0 = c.map(([i, s]) => H[i + 8 * s]);
+      if (H[i] === markA)
+        for (let s = 1; s <= 4; s++) if (H[i + s] === markB) c.push([i, s]);
+    const t0 = c.map(([i, s]) => H[i + timeIndex * s]);
     await sleep(500);
     const H2 = this.mem();
-    // настоящая таблица — та, где поле GetTime() меняется
-    const ok = c.filter(([i, s], k) => H2[i + 8 * s] > 0 && H2[i + 8 * s] !== t0[k]);
-    if (!ok.length) return console.warn('Не нашёл. Lua-команды введены?');
-    [this.addr, this.stride] = ok[0];
-    console.log('НАШЁЛ ✅', this.state());
+    const ok = c.filter(([i, s]) => H2[i + timeIndex * s] > 0 && H2[i + timeIndex * s] !== t0[c.indexOf([i,s])]);
+    // fallback: simpler filter without t0 index issues
+    const ok2 = c.filter(([i, s], k) => H2[i + timeIndex * s] > 0 && H2[i + timeIndex * s] !== t0[k]);
+    const res = ok2.length ? ok2 : ok;
+    if (!res.length) return null;
+    return res[0];
+  },
+
+  // найти Lua-таблицы B и S в памяти WASM
+  async find() {
+    const b = await this.findTable(777001.5, 777002.5, 8);
+    if (b) { this.addr = b[0]; this.stride = b[1]; console.log('НАШЁЛ B ✅', this.state()); }
+    else console.warn('Не нашёл B. Lua-команды введены?');
+    const s = await this.findTable(777003.5, 777004.5, 4);
+    if (s) { this.saddr = s[0]; this.sstride = s[1]; console.log('НАШЁЛ S ✅'); }
+    else console.warn('Не нашёл S.');
   },
 
   state() {
@@ -109,6 +121,26 @@ window.bot = {
     };
   },
 
+  // S-таблица: массив записей {nameHash, spellId, slot, keyCode, mods, ready, inRange}
+  spells() {
+    if (this.saddr === null) return [];
+    const H = this.mem(), g = n => H[this.saddr + n * this.sstride];
+    const n = g(5) | 0;
+    const out = [];
+    let idx = 6;
+    for (let i = 0; i < n; i++) {
+      out.push({ nameHash: g(idx), spellId: g(idx+1), slot: g(idx+2), keyCode: g(idx+3),
+        mods: g(idx+4), ready: g(idx+5), inRange: g(idx+6) });
+      idx += 7;
+    }
+    return out;
+  },
+  castInfo() {
+    if (this.saddr === null) return { count: 0, lastSpell: 0 };
+    const H = this.mem(), g = n => H[this.saddr + n * this.sstride];
+    return { count: g(2) | 0, lastSpell: g(3) | 0 };
+  },
+
   key(k, down) {
     if (down) this.lastBotPressAt = Date.now();
     if (!!this.held[k] === down) return;
@@ -118,6 +150,40 @@ window.bot = {
     this.held[k] = down;
   },
   async tap(k) { this.key(k, true); await sleep(60); this.key(k, false); },
+
+  // нажать умение по хешу названия: найти запись в spells(), нажать с модификаторами
+  async pressSpell(nameHash) {
+    const rec = (this.spells() || []).find(r => r.nameHash === nameHash);
+    if (!rec || !rec.keyCode) { this.warnings.push('spell not on bars: ' + nameHash); return false; }
+    const codeFor = c => {
+      if (c >= 65 && c <= 90) return 'Key' + String.fromCharCode(c);
+      if (c >= 48 && c <= 57) return 'Digit' + String.fromCharCode(c);
+      if (c === 189) return 'Minus';
+      if (c === 187) return 'Equal';
+      if (c >= 112 && c <= 123) return 'F' + (c - 111);
+      return null;
+    };
+    const keyChar = c => (c >= 65 && c <= 90) ? String.fromCharCode(c) : (c >= 48 && c <= 57) ? String.fromCharCode(c) : (c===189?'-':(c===187?'=':''));
+    const code = codeFor(rec.keyCode);
+    if (!code) { this.warnings.push('unsupported key for spell: ' + nameHash); return false; }
+    const key = keyChar(rec.keyCode);
+    const mods = rec.mods || 0;
+    const shift = !!(mods & 1), ctrl = !!(mods & 2), alt = !!(mods & 4);
+    const canvas = CANVAS();
+    const modDown = [];
+    if (shift) { canvas.dispatchEvent(new KeyboardEvent('keydown', {key:'Shift', code:'ShiftLeft', keyCode:16, shiftKey:true, bubbles:true})); modDown.push('shift'); }
+    if (ctrl) { canvas.dispatchEvent(new KeyboardEvent('keydown', {key:'Control', code:'ControlLeft', keyCode:17, ctrlKey:true, bubbles:true})); modDown.push('ctrl'); }
+    if (alt) { canvas.dispatchEvent(new KeyboardEvent('keydown', {key:'Alt', code:'AltLeft', keyCode:18, altKey:true, bubbles:true})); modDown.push('alt'); }
+    this.lastBotPressAt = Date.now();
+    canvas.dispatchEvent(new KeyboardEvent('keydown', {key, code, keyCode: rec.keyCode, shiftKey: shift, ctrlKey: ctrl, altKey: alt, bubbles:true}));
+    await sleep(60);
+    canvas.dispatchEvent(new KeyboardEvent('keyup', {key, code, keyCode: rec.keyCode, shiftKey: shift, ctrlKey: ctrl, altKey: alt, bubbles:true}));
+    if (alt) canvas.dispatchEvent(new KeyboardEvent('keyup', {key:'Alt', code:'AltLeft', keyCode:18, bubbles:true}));
+    if (ctrl) canvas.dispatchEvent(new KeyboardEvent('keyup', {key:'Control', code:'ControlLeft', keyCode:17, bubbles:true}));
+    if (shift) canvas.dispatchEvent(new KeyboardEvent('keyup', {key:'Shift', code:'ShiftLeft', keyCode:16, bubbles:true}));
+    this.lastSpellAt[nameHash] = Date.now();
+    return true;
+  },
   async hold(keys, ms) {
     keys = [].concat(keys);
     keys.forEach(k => this.key(k, true)); await sleep(ms); keys.forEach(k => this.key(k, false));

@@ -10,9 +10,11 @@ import tools.jackson.databind.json.JsonMapper;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 
 /**
@@ -269,6 +271,197 @@ public class RotationLearner {
 
         log.info("Профиль '{}': выучена ротация {} (samples={})", profile, rotation, samples);
         return new Result(rotation, stats, samples);
+    }
+
+    /**
+     * Обучение ротации v2 по применённым заклинаниям (spell_cast, по nameHash).
+     * Тот же алгоритм, что и learn(), но идентификатор — nameHash заклинания.
+     */
+    public Result learnSpells(String profile) {
+        if (!db.isEnabled() || profile == null || profile.isBlank()) {
+            return null;
+        }
+        List<Map<String, Object>> rows = db.querySpellCasts(profile);
+        if (rows.isEmpty()) {
+            return null;
+        }
+        List<Map<String, Object>> casts = new ArrayList<>();
+        for (Map<String, Object> r : rows) {
+            Integer hash = asInt(r.get("name_hash"));
+            if (hash == null) continue;
+            casts.add(r);
+        }
+        if (casts.isEmpty()) return null;
+
+        int inCombatCasts = 0;
+        int fightStarts = 0;
+        for (Map<String, Object> r : casts) {
+            Boolean fight = asBool(r.get("fight"));
+            Integer sfm = asInt(r.get("since_fight_ms"));
+            if (Boolean.TRUE.equals(fight)) inCombatCasts++;
+            if (sfm != null && sfm <= 500) fightStarts++;
+        }
+        int approxFights = Math.max(1, fightStarts / 3);
+        if (approxFights < 3 && inCombatCasts < 60) {
+            log.info("Профиль '{}': недостаточно применений заклинаний (боёв ~{}, в бою {})", profile, approxFights, inCombatCasts);
+            return null;
+        }
+
+        Map<Integer, List<Map<String, Object>>> byHash = new LinkedHashMap<>();
+        for (Map<String, Object> r : casts) {
+            byHash.computeIfAbsent(asInt(r.get("name_hash")), k -> new ArrayList<>()).add(r);
+        }
+
+        List<Integer> considered = new ArrayList<>();
+        for (Map.Entry<Integer, List<Map<String, Object>>> e : byHash.entrySet()) {
+            if (e.getValue().size() >= 5) considered.add(e.getKey());
+        }
+        if (considered.isEmpty()) return null;
+
+        List<Double> allCombatHp = new ArrayList<>();
+        for (Map<String, Object> r : casts) {
+            if (Boolean.TRUE.equals(asBool(r.get("fight")))) {
+                Double hp = asDouble(r.get("hp"));
+                if (hp != null) allCombatHp.add(hp);
+            }
+        }
+        double medAllCombat = median(allCombatHp);
+
+        Map<Integer, Boolean> emergency = new HashMap<>();
+        Map<Integer, Boolean> opening = new HashMap<>();
+        Map<Integer, Double> maxHpPct = new HashMap<>();
+        Map<Integer, Integer> waitAfterSpell = new HashMap<>();
+        Map<Integer, Integer> waitAfterMs = new HashMap<>();
+
+        for (Integer hash : considered) {
+            List<Map<String, Object>> cp = byHash.get(hash);
+            long outOfCombat = cp.stream().filter(r -> !Boolean.TRUE.equals(asBool(r.get("fight")))).count();
+            opening.put(hash, cp.size() > 0 && (double) outOfCombat / cp.size() >= 0.8);
+
+            List<Double> inCombatHp = new ArrayList<>();
+            for (Map<String, Object> r : cp) {
+                if (Boolean.TRUE.equals(asBool(r.get("fight")))) {
+                    Double hp = asDouble(r.get("hp"));
+                    if (hp != null) inCombatHp.add(hp);
+                }
+            }
+            boolean isEmergency = false;
+            if (inCombatHp.size() >= 3 && medAllCombat > 0.7) {
+                double p90 = percentile(inCombatHp, 0.9);
+                if (p90 < 0.6) {
+                    isEmergency = true;
+                    maxHpPct.put(hash, round2(p90 + 0.05));
+                }
+            }
+            emergency.put(hash, isEmergency);
+
+            Map<Integer, List<Integer>> byPrev = new HashMap<>();
+            for (Map<String, Object> r : cp) {
+                Integer pk = asInt(r.get("prev_spell"));
+                Integer pm = asInt(r.get("prev_spell_ms"));
+                if (pk != null && pm != null && pm <= 3000) {
+                    byPrev.computeIfAbsent(pk, k -> new ArrayList<>()).add(pm);
+                }
+            }
+            Integer bestPrev = null;
+            int bestCount = 0;
+            for (Map.Entry<Integer, List<Integer>> e : byPrev.entrySet()) {
+                if (e.getValue().size() >= Math.ceil(cp.size() * 0.7) && e.getValue().size() > bestCount) {
+                    bestCount = e.getValue().size();
+                    bestPrev = e.getKey();
+                }
+            }
+            if (bestPrev != null) {
+                waitAfterSpell.put(hash, bestPrev);
+                int medMs = (int) Math.round(medianInt(byPrev.get(bestPrev)) / 100.0) * 100;
+                waitAfterMs.put(hash, medMs);
+            }
+        }
+
+        Map<Integer, Map<Integer, Integer>> wins = new HashMap<>();
+        for (Integer k : considered) wins.put(k, new HashMap<>());
+        for (Integer k : considered) {
+            for (Map<String, Object> r : byHash.get(k)) {
+                Set<Integer> readySet = readySet(r.get("ready_spells"));
+                for (Integer j : considered) {
+                    if (j.equals(k)) continue;
+                    if (readySet.contains(j)) wins.get(k).merge(j, 1, Integer::sum);
+                }
+            }
+        }
+
+        List<Integer> emergencySpells = new ArrayList<>();
+        List<Integer> openingSpells = new ArrayList<>();
+        List<Integer> restSpells = new ArrayList<>();
+        for (Integer hash : considered) {
+            if (Boolean.TRUE.equals(emergency.get(hash))) emergencySpells.add(hash);
+            else if (Boolean.TRUE.equals(opening.get(hash))) openingSpells.add(hash);
+            else restSpells.add(hash);
+        }
+        Comparator<Integer> copeland = (a, b) -> {
+            int wa = wins.get(a).getOrDefault(b, 0);
+            int wb = wins.get(b).getOrDefault(a, 0);
+            if (wa != wb) return Integer.compare(wb, wa);
+            return Integer.compare(byHash.get(b).size(), byHash.get(a).size());
+        };
+        emergencySpells.sort(copeland);
+        openingSpells.sort(copeland);
+        restSpells.sort(copeland);
+
+        List<Integer> finalOrder = new ArrayList<>();
+        finalOrder.addAll(emergencySpells);
+        finalOrder.addAll(openingSpells);
+        finalOrder.addAll(restSpells);
+
+        List<Map<String, Object>> rotation = new ArrayList<>();
+        Map<String, Object> stats = new LinkedHashMap<>();
+        for (Integer hash : finalOrder) {
+            Map<String, Object> entry = new LinkedHashMap<>();
+            entry.put("spell", hash);
+            List<String> rules = new ArrayList<>();
+            if (Boolean.TRUE.equals(emergency.get(hash))) {
+                entry.put("maxHpPct", maxHpPct.get(hash));
+                long inC = byHash.get(hash).stream().filter(r -> Boolean.TRUE.equals(asBool(r.get("fight")))).count();
+                rules.add(String.format("HP < %.2f в %d из %d применений в бою", maxHpPct.get(hash), inC, byHash.get(hash).size()));
+            }
+            if (Boolean.TRUE.equals(opening.get(hash))) {
+                entry.put("outOfCombatOnly", true);
+                long outC = byHash.get(hash).stream().filter(r -> !Boolean.TRUE.equals(asBool(r.get("fight")))).count();
+                rules.add(String.format("открывающий удар в %d%% случаев вне боя", (int) Math.round(100.0 * outC / byHash.get(hash).size())));
+            }
+            if (waitAfterSpell.containsKey(hash)) {
+                entry.put("waitAfter", Map.of("spell", waitAfterSpell.get(hash), "ms", waitAfterMs.get(hash)));
+                rules.add(String.format("после spell %d (медиана %d мс)", waitAfterSpell.get(hash), waitAfterMs.get(hash)));
+            }
+            if (rules.isEmpty()) rules.add("базовый удар");
+            rotation.add(entry);
+            Map<String, Object> hs = new LinkedHashMap<>();
+            hs.put("count", byHash.get(hash).size());
+            hs.put("rule", String.join("; ", rules));
+            stats.put(String.valueOf(hash), hs);
+        }
+
+        int samples = casts.size();
+        String statsJson = null;
+        try { statsJson = JSON.writeValueAsString(stats); } catch (Exception ignored) {}
+        lastStatsJson.put(profile, statsJson);
+        lastLearnedCount.put(profile, db.querySpellCasts(profile).size());
+        log.info("Профиль '{}': выучена ротация v2 {} (samples={})", profile, rotation, samples);
+        return new Result(rotation, stats, samples);
+    }
+
+    @SuppressWarnings("unchecked")
+    private static Set<Integer> readySet(Object v) {
+        Set<Integer> out = new HashSet<>();
+        if (v == null) return out;
+        if (v instanceof java.sql.Array arr) {
+            try { Object a = arr.getArray(); if (a instanceof Object[] oa) for (Object o : oa) { Integer i = asInt(o); if (i != null) out.add(i); } } catch (Exception ignored) {}
+        } else if (v instanceof Object[] oa) {
+            for (Object o : oa) { Integer i = asInt(o); if (i != null) out.add(i); }
+        } else if (v instanceof List<?> list) {
+            for (Object o : list) { Integer i = asInt(o); if (i != null) out.add(i); }
+        }
+        return out;
     }
 
     // ---- helpers ----
