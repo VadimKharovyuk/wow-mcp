@@ -11,8 +11,8 @@ Object.assign(bot, {
     while (this.running) {
       const s = this.state(), hpPct = s.hp / s.hpMax;
       if (!s.fight && (!s.target || s.targetHp === 0)) return { result: 'бой окончен', ...s };
-      if (hpPct < fleeAt) { this.stop(); return { result: 'мало HP — нужен выбор', ...s }; }
-      if (Date.now() - t0 > timeout) { this.stop(); return { result: 'бой слишком долгий', ...s }; }
+      if (hpPct < fleeAt) { this.release(); return { result: 'мало HP — нужен выбор', ...s }; }
+      if (Date.now() - t0 > timeout) { this.release(); return { result: 'бой слишком долгий', ...s }; }
 
       if (!s.target || !s.enemy || s.targetHp === 0) { await this.tap('TAB'); await sleep(300); continue; }
 
@@ -48,15 +48,38 @@ Object.assign(bot, {
     return { result: 'остановлен вручную', ...this.state() };
   },
 
-  async rest({ until = 0.8, foodKey = null, timeout = 60000 } = {}) {
+  async rest({ hpUntil = 0.8, manaUntil = 0.9, manaBelow = 0.3,
+                healKey = '4', drinkKey = '0', timeout = 60000 } = {}) {
     const t0 = Date.now();
-    if (foodKey) await this.tap(foodKey);
+    const isReady = (s, k) => (s.ready >> (+k - 1)) & 1;
+    let s = this.state();
+    const bail = r => ({ result: r, ...this.state() });
+
+    // 1) питьё, если мало маны
+    if (drinkKey && s.manaPct < manaBelow) {
+      await this.tap(drinkKey);
+      while (Date.now() - t0 < timeout) {
+        await sleep(1000); s = this.state();
+        if (s.fight) return bail('бой во время отдыха');
+        if (s.manaPct >= manaUntil) break;
+      }
+    }
+    // 2) лечение заклинанием (до 3 раз)
+    for (let i = 0; i < 3 && healKey; i++) {
+      s = this.state();
+      if (s.fight) return bail('бой во время отдыха');
+      if (s.hp / s.hpMax >= hpUntil || s.manaPct < 0.15) break;
+      if (!isReady(s, healKey)) { await sleep(500); continue; }
+      await this.tap(healKey);
+      await sleep(3000);                       // время чтения заклинания
+    }
+    // 3) добрать естественным отдыхом
     while (Date.now() - t0 < timeout) {
-      const s = this.state();
-      if (s.fight) return { result: 'бой во время отдыха', ...s };
-      if (s.hp / s.hpMax >= until) return { result: 'отдохнул', ...s };
+      s = this.state();
+      if (s.fight) return bail('бой во время отдыха');
+      if (s.hp / s.hpMax >= hpUntil) return bail('отдохнул');
       await sleep(1000);
     }
-    return { result: 'отдых: таймаут', ...this.state() };
+    return bail('отдых: таймаут');
   }
 });

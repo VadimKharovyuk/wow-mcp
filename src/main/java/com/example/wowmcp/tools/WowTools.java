@@ -42,7 +42,8 @@ public class WowTools {
     @Tool(name = "get_state", description = """
             Показывает состояние персонажа: координаты x/y в зоне (0–100), процент HP, \
             идёт ли бой, есть ли цель и какая задача сейчас выполняется. Поле ready — маска \
-            готовых умений панели 1–9, moDead — под курсором труп, lootN — предметов в окне добычи.""")
+            готовых умений панели 1–9, moDead — под курсором труп, lootN — предметов в окне добычи, \
+            tLvl/tFlags/tDist — уровень/флаги/дистанция цели, manaPct — мана, grind — статистика гринда.""")
     public String getState() {
         return bridge.report();
     }
@@ -92,8 +93,83 @@ public class WowTools {
         return jsonResult(bridge.start("rest", List.of()));
     }
 
+    @Tool(name = "grind", description = """
+            Автоматическая охота вокруг текущей точки: найти подходящего моба, подойти, \
+            убить, собрать добычу, отдохнуть, повторить. Работает в фоне. Возвращается по \
+            лимиту убийств/времени или при проблеме (смерть, застрял, сумки полные, мобов нет). \
+            Во время охоты вызывай wait_job; статистика — в поле grind.""")
+    public String grind(
+            @ToolParam(required = false, description = "Радиус охоты вокруг старта, 0.5..10 (по умолчанию 2.5)")
+            Double radius,
+            @ToolParam(required = false, description = "Лимит убийств, 0 = без лимита (по умолчанию 10)")
+            Integer maxKills,
+            @ToolParam(required = false, description = "Лимит времени в минутах, 1..180 (по умолчанию 30)")
+            Integer maxMinutes,
+            @ToolParam(required = false, description = "Минимальная разница уровней цели, -10..5 (по умолчанию -5)")
+            Integer minLvlDiff,
+            @ToolParam(required = false, description = "Максимальная разница уровней цели, -10..5 (по умолчанию 2)")
+            Integer maxLvlDiff,
+            @ToolParam(required = false, description = "Порог маны для питья, 0..1 (по умолчанию 0.3)")
+            Double manaBelow,
+            @ToolParam(required = false, description = "Слот лечения в отдыхе, '0'..'9' (по умолчанию '4')")
+            String healKey,
+            @ToolParam(required = false, description = "Слот питья в отдыхе, '0'..'9' (по умолчанию '0')")
+            String drinkKey) {
+        Map<String, Object> opts = new LinkedHashMap<>();
+        if (radius != null) {
+            if (!Double.isFinite(radius) || radius < 0.5 || radius > 10) {
+                throw new IllegalArgumentException("radius должен быть от 0.5 до 10");
+            }
+            opts.put("radius", radius);
+        }
+        if (maxKills != null) {
+            if (maxKills < 0 || maxKills > 200) {
+                throw new IllegalArgumentException("maxKills должен быть от 0 до 200");
+            }
+            opts.put("maxKills", maxKills);
+        }
+        if (maxMinutes != null) {
+            if (maxMinutes < 1 || maxMinutes > 180) {
+                throw new IllegalArgumentException("maxMinutes должен быть от 1 до 180");
+            }
+            opts.put("maxMinutes", maxMinutes);
+        }
+        if (minLvlDiff != null) {
+            if (minLvlDiff < -10 || minLvlDiff > 5) {
+                throw new IllegalArgumentException("minLvlDiff должен быть от -10 до 5");
+            }
+            opts.put("minLvlDiff", minLvlDiff);
+        }
+        if (maxLvlDiff != null) {
+            if (maxLvlDiff < -10 || maxLvlDiff > 5) {
+                throw new IllegalArgumentException("maxLvlDiff должен быть от -10 до 5");
+            }
+            opts.put("maxLvlDiff", maxLvlDiff);
+        }
+        if (manaBelow != null) {
+            if (!Double.isFinite(manaBelow) || manaBelow < 0 || manaBelow > 1) {
+                throw new IllegalArgumentException("manaBelow должен быть от 0 до 1");
+            }
+            opts.put("manaBelow", manaBelow);
+        }
+        if (healKey != null) {
+            if (!healKey.matches("[0-9]")) {
+                throw new IllegalArgumentException("healKey должен быть слотом '0'..'9'");
+            }
+            opts.put("healKey", healKey);
+        }
+        if (drinkKey != null) {
+            if (!drinkKey.matches("[0-9]")) {
+                throw new IllegalArgumentException("drinkKey должен быть слотом '0'..'9'");
+            }
+            opts.put("drinkKey", drinkKey);
+        }
+        List<Object> args = opts.isEmpty() ? List.of() : List.of(opts);
+        return jsonResult(bridge.start("grind", args));
+    }
+
     @Tool(name = "wait_job", description = """
-            Ждёт завершения текущей задачи бота (go_to/move_to/fight/loot/rest), опрашивая \
+            Ждёт завершения текущей задачи бота (go_to/move_to/fight/loot/rest/grind), опрашивая \
             состояние раз в секунду, и возвращает финальный отчёт. По умолчанию ждёт 30 секунд, максимум 60.""")
     public String waitJob(
             @ToolParam(required = false, description = "Сколько секунд ждать, по умолчанию 30, максимум 60")

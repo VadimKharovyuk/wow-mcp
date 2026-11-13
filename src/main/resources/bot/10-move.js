@@ -10,7 +10,7 @@ Object.assign(bot, {
 
     while (this.running) {
       const s = this.state();
-      const done = r => { this.stop(); return { result: r, stuckTries: stuck, ...s }; };
+      const done = r => { this.release(); return { result: r, stuckTries: stuck, ...s }; };
       if (s.x === 0 && s.y === 0) return done('нет координат (закрой карту мира)');
       if (s.fight) return done('бой');
       const dx = tx - s.x, dy = ty - s.y;
