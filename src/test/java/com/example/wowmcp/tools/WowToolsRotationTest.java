@@ -22,6 +22,48 @@ class WowToolsRotationTest {
     }
 
     @Test
+    void acceptsOutOfCombatAndWaitAfter() {
+        List<Map<String, Object>> rotation = WowTools.parseRotation(
+                "[{\"key\":\"2\",\"maxHpPct\":0.35},"
+                        + "{\"key\":\"4\",\"maxHpPct\":0.35,\"waitAfter\":{\"key\":\"2\",\"ms\":1000}},"
+                        + "{\"key\":3,\"outOfCombatOnly\":true},"
+                        + "{\"key\":\"1\"}]");
+
+        assertThat(rotation).hasSize(4);
+        assertThat(rotation.get(1)).containsEntry("key", "4");
+        Map<?, ?> waitAfter = (Map<?, ?>) rotation.get(1).get("waitAfter");
+        assertThat(waitAfter.get("key")).isEqualTo("2");
+        assertThat(waitAfter.get("ms")).isEqualTo(1000L);
+        assertThat(rotation.get(2)).containsEntry("key", "3").containsEntry("outOfCombatOnly", true);
+    }
+
+    @Test
+    void rejectsBadWaitAfter() {
+        assertThatThrownBy(() -> WowTools.parseRotation(
+                "[{\"key\":\"4\",\"waitAfter\":{\"key\":\"0\",\"ms\":1000}}]"))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("waitAfter.key");
+        assertThatThrownBy(() -> WowTools.parseRotation(
+                "[{\"key\":\"4\",\"waitAfter\":{\"key\":\"2\",\"ms\":10001}}]"))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("waitAfter.ms");
+        assertThatThrownBy(() -> WowTools.parseRotation(
+                "[{\"key\":\"4\",\"waitAfter\":{\"key\":\"2\",\"ms\":\"soon\"}}]"))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("waitAfter.ms");
+        assertThatThrownBy(() -> WowTools.parseRotation("[{\"key\":\"4\",\"waitAfter\":1000}]"))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("waitAfter");
+    }
+
+    @Test
+    void rejectsNonBooleanOutOfCombatOnly() {
+        assertThatThrownBy(() -> WowTools.parseRotation("[{\"key\":\"3\",\"outOfCombatOnly\":\"yes\"}]"))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("outOfCombatOnly");
+    }
+
+    @Test
     void rejectsBadSlot() {
         assertThatThrownBy(() -> WowTools.parseRotation("[{\"key\":\"0\"}]"))
                 .isInstanceOf(IllegalArgumentException.class)

@@ -32,18 +32,24 @@ window.chat = async text => {
 window.KEYS = { W:['KeyW','w',87], A:['KeyA','a',65], D:['KeyD','d',68], S:['KeyS','s',83],
                 SPACE:['Space',' ',32], TAB:['Tab','Tab',9] };
 for (let n = 1; n <= 9; n++) KEYS[n] = ['Digit' + n, '' + n, 48 + n];
+KEYS[0] = ['Digit0', '0', 48];
+KEYS['0'] = KEYS[0];
 
 // ===== базовый объект бота =====
 window.bot = {
-  addr: null, stride: 0, held: {}, running: false,
-
+  addr: null, stride: 0, held: {}, running: false, grinding: false,
+  lastKey: {}, grindStats: null,
   // ---- РОТАЦИЯ: приоритетный список слотов панели 1–9 ----
   // Готовность умений берём из маски B[13] (state().ready), а не из таймеров.
   // maxHpPct — применять умение, только если HP ниже этой доли.
+  // outOfCombatOnly — только вне боя (открывающий удар).
+  // waitAfter { key, ms } — не переходить к следующим умениям, пока с нажатия key
+  // прошло меньше ms (чтобы удар не запустил ГКД раньше лечения).
   rotation: [
-    { key: '3', maxHpPct: 0.4 },  // лечение/защита, если HP < 40%
-    { key: '2' },                // удар с перезарядкой
-    { key: '1' },                // основной удар
+    { key: '2', maxHpPct: 0.35 },                                    // стан при низком HP
+    { key: '4', maxHpPct: 0.35, waitAfter: { key: '2', ms: 1000 } }, // лечение через 1 с после стана
+    { key: '3', outOfCombatOnly: true },                             // агро издалека, начало боя
+    { key: '1' },                                                    // основной удар
   ],
 
   mem() { return new Float64Array(wasmMemory.buffer); },
@@ -70,8 +76,8 @@ window.bot = {
       x: +(g(2) * 100).toFixed(2), y: +(g(3) * 100).toFixed(2), facing: +g(4).toFixed(2),
       hp: g(5), hpMax: g(6), fight: g(7) === 1, time: +g(8).toFixed(1),
       target: g(9) === 1, targetHp: g(10), enemy: g(11) === 1,
-      ready: g(12), err: g(13), errTime: +g(14).toFixed(2), moDead: g(15) === 1, lootN: g(16)
-    };
+      ready: g(12), err: g(13), errTime: +g(14).toFixed(2), moDead: g(15) === 1, lootN: g(16),
+      tLvl: g(17), tFlags: g(18), tDist: g(19), manaPct: +g(20).toFixed(2)    };
   },
 
   key(k, down) {
@@ -86,7 +92,8 @@ window.bot = {
     keys = [].concat(keys);
     keys.forEach(k => this.key(k, true)); await sleep(ms); keys.forEach(k => this.key(k, false));
   },
-  stop() { this.running = false; for (const k in this.held) this.key(k, false); },
+  release() { this.running = false; for (const k in this.held) this.key(k, false); },
+  stop()    { this.grinding = false; this.release(); },
 
   // ---- фоновый режим для Claude: start → report ----
   job: { status: 'idle' },
@@ -99,6 +106,6 @@ window.bot = {
   },
   report() {
     const s = this.state();
-    return JSON.stringify({ job: this.job, hpPct: Math.round(s.hp / s.hpMax * 100), ...s });
+    return JSON.stringify({ job: this.job, hpPct: Math.round(s.hp / s.hpMax * 100), ...s, grind: this.grindStats || null });
   }
 };

@@ -233,13 +233,23 @@ public class GameBridge implements AutoCloseable {
         try {
             return action.get();
         } catch (PlaywrightException e) {
-            if (Thread.currentThread().isInterrupted()) {
+            if (Thread.currentThread().isInterrupted() || stillConnected()) {
+                // Это не обрыв связи, а ошибка самого вызова — повторять бессмысленно.
                 throw e;
             }
             log.warn("Соединение с игрой упало ({}). Переподключаюсь и повторяю.", e.getMessage());
             forgetPage();
             ensureConnected();
             return action.get();
+        }
+    }
+
+    /** Соединение с вкладкой всё ещё живо (значит, ошибка не сетевая). */
+    private boolean stillConnected() {
+        try {
+            return page != null && !page.isClosed() && browser != null && browser.isConnected();
+        } catch (PlaywrightException e) {
+            return false;
         }
     }
 
@@ -313,6 +323,15 @@ public class GameBridge implements AutoCloseable {
         return TimeUnit.NANOSECONDS.toMillis(remainingNanos(deadline));
     }
 
+    /**
+     * Приводит миллисекунды к {@code int} для передачи в страницу: Playwright
+     * сериализует только {@link Integer} и {@link Double}, на {@link Long} бросает
+     * «Unsupported type of argument».
+     */
+    /** Playwright передаёт в страницу только Integer/Double — приводим long к int с ограничением. */
+    static int toPageTimeoutMs(long ms) {
+        return (int) Math.max(1, Math.min(Integer.MAX_VALUE, ms));
+    }
     private static IllegalStateException readyTimeout() {
         return new IllegalStateException(READY_TIMEOUT_MESSAGE);
     }
@@ -430,7 +449,9 @@ public class GameBridge implements AutoCloseable {
         }
         // Playwright дождётся промиса, который вернёт find(); сам find ограничен
         // таймаутом, чтобы не зависнуть, если таймеры страницы заморожены.
-        Object result = page.evaluate(FIND_WITH_TIMEOUT_JS, remaining);
+        // Важно: аргумент — int, а не long: Playwright умеет передавать в страницу
+        // только Integer/Double, на Long падает «Unsupported type of argument».
+        Object result = page.evaluate(FIND_WITH_TIMEOUT_JS, toPageTimeoutMs(remaining));
         if ("timeout".equals(result)) {
             throw readyTimeout();
         }

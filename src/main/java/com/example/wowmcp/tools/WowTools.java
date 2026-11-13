@@ -118,10 +118,14 @@ public class WowTools {
 
     @Tool(name = "set_rotation", description = """
             Задать приоритет умений: список слотов панели 1–9 от самого важного к основному удару. \
-            Формат: JSON-массив [{"key":"3","maxHpPct":0.4},{"key":"2"},{"key":"1"}]. \
-            maxHpPct необязателен (0..1): умение применяется, только если HP ниже этой доли.""")
+            Формат: JSON-массив [{"key":"2","maxHpPct":0.35},{"key":"4","waitAfter":{"key":"2","ms":1000}}]. \
+            maxHpPct необязателен (0..1): умение применяется, только если HP ниже этой доли. \
+            outOfCombatOnly (true/false) — умение только вне боя. \
+            waitAfter {key, ms} — не переходить к следующим умениям, пока с нажатия key прошло меньше ms.""")
     public String setRotation(
-            @ToolParam(description = "JSON-массив вида [{\"key\":\"3\",\"maxHpPct\":0.4},{\"key\":\"2\"},{\"key\":\"1\"}]")
+            @ToolParam(description = "JSON-массив вида [{\"key\":\"2\",\"maxHpPct\":0.35},"
+                    + "{\"key\":\"4\",\"maxHpPct\":0.35,\"waitAfter\":{\"key\":\"2\",\"ms\":1000}},"
+                    + "{\"key\":\"3\",\"outOfCombatOnly\":true},{\"key\":\"1\"}]")
             String rotationJson) {
         List<Map<String, Object>> rotation = parseRotation(rotationJson);
         bridge.ensureReady();
@@ -133,7 +137,8 @@ public class WowTools {
     }
 
     @Tool(name = "get_rotation", description = """
-            Показывает текущий приоритет умений (массив слотов панели 1–9 с необязательным maxHpPct).""")
+            Показывает текущий приоритет умений (массив слотов панели 1–9 с необязательными \
+            maxHpPct, outOfCombatOnly и waitAfter).""")
     public String getRotation() {
         bridge.ensureReady();
         return String.valueOf(bridge.eval("() => JSON.stringify(bot.rotation)"));
@@ -192,13 +197,7 @@ public class WowTools {
             }
 
             Object keyValue = item.get("key");
-            String key = keyValue instanceof Number number
-                    ? String.valueOf(number.intValue())
-                    : String.valueOf(keyValue);
-            if (keyValue == null || !key.matches("[1-9]")) {
-                throw new IllegalArgumentException(
-                        "Элемент #" + position + ": key должен быть слотом '1'..'9', получено: " + keyValue);
-            }
+            String key = slotKey(keyValue, "key", position);
             if (!usedKeys.add(key)) {
                 throw new IllegalArgumentException("Слот " + key + " указан в ротации больше одного раза");
             }
@@ -222,9 +221,56 @@ public class WowTools {
                 entry.put("maxHpPct", threshold);
             }
 
+            Object outOfCombatValue = item.get("outOfCombatOnly");
+            if (outOfCombatValue != null) {
+                if (!(outOfCombatValue instanceof Boolean outOfCombatOnly)) {
+                    throw new IllegalArgumentException(
+                            "Элемент #" + position + ": outOfCombatOnly должен быть true/false, получено: "
+                                    + outOfCombatValue);
+                }
+                entry.put("outOfCombatOnly", outOfCombatOnly);
+            }
+
+            Object waitAfterValue = item.get("waitAfter");
+            if (waitAfterValue != null) {
+                if (!(waitAfterValue instanceof Map<?, ?> waitAfter)) {
+                    throw new IllegalArgumentException(
+                            "Элемент #" + position + ": waitAfter должен быть объектом {key, ms}, получено: "
+                                    + waitAfterValue);
+                }
+                Object waitKeyValue = waitAfter.get("key");
+                String waitKey = slotKey(waitKeyValue, "waitAfter.key", position);
+
+                Object waitMsValue = waitAfter.get("ms");
+                if (!(waitMsValue instanceof Number msNumber)) {
+                    throw new IllegalArgumentException(
+                            "Элемент #" + position + ": waitAfter.ms должен быть числом от 0 до 10000, получено: "
+                                    + waitMsValue);
+                }
+                double waitMs = msNumber.doubleValue();
+                if (!Double.isFinite(waitMs) || waitMs < 0 || waitMs > 10_000 || waitMs != Math.rint(waitMs)) {
+                    throw new IllegalArgumentException(
+                            "Элемент #" + position + ": waitAfter.ms должен быть целым числом от 0 до 10000, "
+                                    + "получено: " + waitMsValue);
+                }
+                entry.put("waitAfter", Map.of("key", waitKey, "ms", (long) waitMs));
+            }
+
             rotation.add(entry);
         }
         return rotation;
+    }
+
+    /** Слот панели '1'..'9' из JSON-значения (строка или целое число). */
+    private static String slotKey(Object value, String field, int position) {
+        String key = value instanceof Number number && number.doubleValue() == Math.rint(number.doubleValue())
+                ? String.valueOf(number.intValue())
+                : String.valueOf(value);
+        if (value == null || !key.matches("[1-9]")) {
+            throw new IllegalArgumentException(
+                    "Элемент #" + position + ": " + field + " должен быть слотом '1'..'9', получено: " + value);
+        }
+        return key;
     }
 
     private static int normalizeWaitSeconds(Integer maxSeconds) {
