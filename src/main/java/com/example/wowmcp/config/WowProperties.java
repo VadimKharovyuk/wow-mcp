@@ -7,10 +7,11 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
  *
  * @param cdpUrl          адрес Chrome DevTools Protocol (Chrome должен быть запущен с --remote-debugging-port)
  * @param pageUrlContains часть URL вкладки, в которой открыта игра
- * @param botJsPath       путь к bot.js на диске; если не задан, скрипт берётся из classpath
+ * @param botJsDir        каталог с модулями bot.js (manifest.txt + *.js) для режима разработки;
+ *                        если не задан, модули берутся из classpath
  */
 @ConfigurationProperties(prefix = "wow")
-public record WowProperties(String cdpUrl, String pageUrlContains, String botJsPath) {
+public record WowProperties(String cdpUrl, String pageUrlContains, String botJsDir) {
 
     public WowProperties {
         if (cdpUrl == null || cdpUrl.isBlank()) {
@@ -19,8 +20,8 @@ public record WowProperties(String cdpUrl, String pageUrlContains, String botJsP
         if (pageUrlContains == null || pageUrlContains.isBlank()) {
             pageUrlContains = "lasthavens.com/play";
         }
-        if (botJsPath != null && botJsPath.isBlank()) {
-            botJsPath = null;
+        if (botJsDir != null && botJsDir.isBlank()) {
+            botJsDir = null;
         }
     }
 }

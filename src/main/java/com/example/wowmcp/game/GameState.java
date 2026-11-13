@@ -1,6 +1,7 @@
 package com.example.wowmcp.game;
 
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
+import tools.jackson.databind.DeserializationFeature;
 import tools.jackson.databind.ObjectMapper;
 import tools.jackson.databind.json.JsonMapper;
 
@@ -20,7 +21,12 @@ public record GameState(
         double time,
         boolean target,
         double targetHp,
-        boolean enemy) {
+        boolean enemy,
+        long ready,
+        int err,
+        double errTime,
+        boolean moDead,
+        int lootN) {
 
     /**
      * Текущая задача бота. У завершённой задачи {@code result} содержит итог,
@@ -28,10 +34,22 @@ public record GameState(
      * их игнорируем.
      */
     @JsonIgnoreProperties(ignoreUnknown = true)
-    public record Job(String name, String status, Long started, String result, String error) {
+    public record Job(
+            String name,
+            String status,
+            Long started,
+            String result,
+            String error,
+            long ready,
+            int err,
+            double errTime,
+            boolean moDead,
+            int lootN) {
     }
 
-    private static final ObjectMapper JSON = JsonMapper.builder().build();
+    private static final ObjectMapper JSON = JsonMapper.builder()
+            .disable(DeserializationFeature.FAIL_ON_NULL_FOR_PRIMITIVES)
+            .build();
 
     public static GameState parse(String json) {
         return JSON.readValue(json, GameState.class);

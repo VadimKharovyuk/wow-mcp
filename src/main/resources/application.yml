@@ -14,8 +14,9 @@ spring:
         type: SYNC
         instructions: >-
           Управление персонажем в LastHavens (WoW 3.3.5 в браузере).
-          Начинай с get_state, затем используй go_to/move_to/fight/rest
-          и wait_job для ожидания результата. Координаты — в диапазоне 0–100.
+          Начинай с get_state, затем используй go_to/move_to/fight/rest/loot
+          и wait_job для ожидания результата. После боя вызывай loot.
+          Координаты — в диапазоне 0–100. Ротацию умений можно задать через set_rotation.
 
 wow:
   # Chrome должен быть запущен с --remote-debugging-port=9222

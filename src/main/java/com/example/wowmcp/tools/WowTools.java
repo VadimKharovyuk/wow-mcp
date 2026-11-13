@@ -10,14 +10,18 @@ import org.springframework.stereotype.Component;
 import tools.jackson.databind.ObjectMapper;
 import tools.jackson.databind.json.JsonMapper;
 
+import java.util.ArrayList;
+import java.util.HashSet;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.TimeUnit;
 
 /**
- * MCP-инструменты этапа 1. Все возвращают короткую JSON-строку.
+ * MCP-инструменты. Все возвращают короткую JSON-строку.
  *
- * <p>Java только вызывает функции bot.js; циклы ходьбы и боя остаются в браузере.
+ * <p>Java только вызывает функции bot.js; циклы ходьбы, боя и сбора добычи остаются в браузере.
  */
 @Component
 public class WowTools {
@@ -37,19 +41,24 @@ public class WowTools {
 
     @Tool(name = "get_state", description = """
             Показывает состояние персонажа: координаты x/y в зоне (0–100), процент HP, \
-            идёт ли бой, есть ли цель и какая задача сейчас выполняется.""")
+            идёт ли бой, есть ли цель и какая задача сейчас выполняется. Поле ready — маска \
+            готовых умений панели 1–9, moDead — под курсором труп, lootN — предметов в окне добычи.""")
     public String getState() {
         return bridge.report();
     }
 
     @Tool(name = "go_to", description = """
-            Бежать к точке (x, y в координатах зоны 0–100), по пути отбиваясь от мобов. \
-            Запускается в фоне и сразу возвращает ответ — результат потом смотри через wait_job.""")
+            Бежать к точке (x, y в координатах зоны 0–100), по пути отбиваясь от мобов, \
+            а после боя собирая добычу (autoLoot). Запускается в фоне и сразу возвращает \
+            ответ — результат потом смотри через wait_job.""")
     public String goTo(
             @ToolParam(description = "Координата X в зоне, от 0 до 100") double x,
-            @ToolParam(description = "Координата Y в зоне, от 0 до 100") double y) {
+            @ToolParam(description = "Координата Y в зоне, от 0 до 100") double y,
+            @ToolParam(required = false, description = "Собирать добычу после боя, по умолчанию true")
+            Boolean autoLoot) {
         validateCoordinates(x, y);
-        return jsonResult(bridge.start("go", List.of(x, y)));
+        boolean loot = autoLoot == null || autoLoot;
+        return jsonResult(bridge.start("go", List.of(x, y, Map.of("autoLoot", loot))));
     }
 
     @Tool(name = "move_to", description = """
@@ -63,10 +72,18 @@ public class WowTools {
     }
 
     @Tool(name = "fight", description = """
-            Драться с текущими врагами, используя ротацию способностей из bot.js. \
+            Драться с текущими врагами: умения жмутся по реальной готовности (маска ready), \
+            с реакцией на ошибки «не лицом к цели» и «слишком далеко». \
             Работает в фоне — результат смотри через wait_job.""")
     public String fight() {
         return jsonResult(bridge.start("fight", List.of()));
+    }
+
+    @Tool(name = "loot", description = """
+            Найти ближайший труп на экране и собрать добычу. Вызывать после боя. \
+            Работает в фоне — результат смотри через wait_job.""")
+    public String loot() {
+        return jsonResult(bridge.start("loot", List.of()));
     }
 
     @Tool(name = "rest", description = """
@@ -76,8 +93,8 @@ public class WowTools {
     }
 
     @Tool(name = "wait_job", description = """
-            Ждёт завершения текущей задачи бота (go_to/move_to/fight/rest), опрашивая состояние \
-            раз в секунду, и возвращает финальный отчёт. По умолчанию ждёт 30 секунд, максимум 60.""")
+            Ждёт завершения текущей задачи бота (go_to/move_to/fight/loot/rest), опрашивая \
+            состояние раз в секунду, и возвращает финальный отчёт. По умолчанию ждёт 30 секунд, максимум 60.""")
     public String waitJob(
             @ToolParam(required = false, description = "Сколько секунд ждать, по умолчанию 30, максимум 60")
             Integer maxSeconds) {
@@ -99,12 +116,35 @@ public class WowTools {
         return jsonResult(bridge.stop());
     }
 
+    @Tool(name = "set_rotation", description = """
+            Задать приоритет умений: список слотов панели 1–9 от самого важного к основному удару. \
+            Формат: JSON-массив [{"key":"3","maxHpPct":0.4},{"key":"2"},{"key":"1"}]. \
+            maxHpPct необязателен (0..1): умение применяется, только если HP ниже этой доли.""")
+    public String setRotation(
+            @ToolParam(description = "JSON-массив вида [{\"key\":\"3\",\"maxHpPct\":0.4},{\"key\":\"2\"},{\"key\":\"1\"}]")
+            String rotationJson) {
+        List<Map<String, Object>> rotation = parseRotation(rotationJson);
+        bridge.ensureReady();
+        Object saved = bridge.eval(
+                "(r) => { bot.rotation = r; return JSON.stringify(bot.rotation); }", rotation);
+        return JSON.writeValueAsString(Map.of(
+                "result", "ротация сохранена",
+                "rotation", JSON.readValue(String.valueOf(saved), Object.class)));
+    }
+
+    @Tool(name = "get_rotation", description = """
+            Показывает текущий приоритет умений (массив слотов панели 1–9 с необязательным maxHpPct).""")
+    public String getRotation() {
+        bridge.ensureReady();
+        return String.valueOf(bridge.eval("() => JSON.stringify(bot.rotation)"));
+    }
+
     @Tool(name = "reload_bot", description = """
             Перезагружает bot.js прямо в открытой странице игры, без её перезагрузки: \
             останавливает старого бота, удаляет window.bot и заново загружает скрипт, \
-            после чего повторяет Lua-подготовку и поиск таблицы. Если задано свойство \
-            wow.bot-js-path, скрипт читается с диска при каждом вызове — пересборка не нужна; \
-            иначе берётся из classpath.""")
+            собранный из модулей по manifest.txt, после чего повторяет Lua-подготовку \
+            и поиск таблицы. Если задано свойство wow.bot-js-dir, модули читаются с диска \
+            при каждом вызове — пересборка не нужна; иначе берутся из classpath.""")
     public String reloadBot() {
         return jsonResult(bridge.reloadBot());
     }
@@ -117,6 +157,74 @@ public class WowTools {
             log.warn("Не разобрал ответ bot.report(): {}", e.getMessage());
             return false;
         }
+    }
+
+    /**
+     * Валидирует и нормализует ротацию: только key '1'..'9' и необязательный maxHpPct 0..1.
+     * В страницу передаются уже проверенные значения, без склейки JS-строк.
+     */
+    static List<Map<String, Object>> parseRotation(String rotationJson) {
+        if (rotationJson == null || rotationJson.isBlank()) {
+            throw new IllegalArgumentException(
+                    "rotationJson не должен быть пустым. Ожидается JSON-массив вида "
+                            + "[{\"key\":\"3\",\"maxHpPct\":0.4},{\"key\":\"2\"},{\"key\":\"1\"}]");
+        }
+
+        Object parsed;
+        try {
+            parsed = JSON.readValue(rotationJson, Object.class);
+        } catch (RuntimeException e) {
+            throw new IllegalArgumentException("rotationJson должен быть корректным JSON: " + e.getMessage(), e);
+        }
+        if (!(parsed instanceof List<?> items) || items.isEmpty()) {
+            throw new IllegalArgumentException(
+                    "rotationJson должен быть непустым JSON-массивом объектов вида "
+                            + "{\"key\":\"3\",\"maxHpPct\":0.4}");
+        }
+
+        List<Map<String, Object>> rotation = new ArrayList<>();
+        Set<String> usedKeys = new HashSet<>();
+        for (int i = 0; i < items.size(); i++) {
+            int position = i + 1;
+            if (!(items.get(i) instanceof Map<?, ?> item)) {
+                throw new IllegalArgumentException(
+                        "Элемент #" + position + " должен быть объектом с полем key ('1'..'9')");
+            }
+
+            Object keyValue = item.get("key");
+            String key = keyValue instanceof Number number
+                    ? String.valueOf(number.intValue())
+                    : String.valueOf(keyValue);
+            if (keyValue == null || !key.matches("[1-9]")) {
+                throw new IllegalArgumentException(
+                        "Элемент #" + position + ": key должен быть слотом '1'..'9', получено: " + keyValue);
+            }
+            if (!usedKeys.add(key)) {
+                throw new IllegalArgumentException("Слот " + key + " указан в ротации больше одного раза");
+            }
+
+            Map<String, Object> entry = new LinkedHashMap<>();
+            entry.put("key", key);
+
+            Object maxHpPctValue = item.get("maxHpPct");
+            if (maxHpPctValue != null) {
+                if (!(maxHpPctValue instanceof Number number)) {
+                    throw new IllegalArgumentException(
+                            "Элемент #" + position + ": maxHpPct должен быть числом от 0 до 1, получено: "
+                                    + maxHpPctValue);
+                }
+                double threshold = number.doubleValue();
+                if (Double.isNaN(threshold) || threshold < 0 || threshold > 1) {
+                    throw new IllegalArgumentException(
+                            "Элемент #" + position + ": maxHpPct должен быть от 0 до 1, получено: "
+                                    + maxHpPctValue);
+                }
+                entry.put("maxHpPct", threshold);
+            }
+
+            rotation.add(entry);
+        }
+        return rotation;
     }
 
     private static int normalizeWaitSeconds(Integer maxSeconds) {

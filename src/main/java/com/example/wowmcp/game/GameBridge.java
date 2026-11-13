@@ -38,7 +38,9 @@ public class GameBridge implements AutoCloseable {
 
     private static final Logger log = LoggerFactory.getLogger(GameBridge.class);
 
-    private static final String BOT_JS_RESOURCE = "bot.js";
+    private static final String BOT_MANIFEST_RESOURCE = "bot/manifest.txt";
+    private static final String BOT_MODULE_PREFIX = "bot/";
+    private static final String BOT_MODULE_JOINER = ";\n";
     private static final List<String> LUA_SETUP = readResourceLines("lua-setup.txt");
 
     private static final long LUA_LINE_PAUSE_MS = 700;
@@ -128,8 +130,8 @@ public class GameBridge implements AutoCloseable {
 
     /** Откуда берётся bot.js — для отчёта reload_bot. */
     private String botJsSource() {
-        String path = properties.botJsPath();
-        return path == null ? "из classpath" : "с диска " + path;
+        String dir = properties.botJsDir();
+        return dir == null ? "из classpath (bot/manifest.txt)" : "с диска " + dir;
     }
 
     /** Произвольное выражение/функция в контексте страницы игры. */
@@ -232,7 +234,7 @@ public class GameBridge implements AutoCloseable {
     }
 
     private void injectBot() {
-        log.info("Загружаю bot.js в страницу игры ({})", botJsSource());
+        log.info("Загружаю модули bot.js в страницу игры ({})", botJsSource());
         page.evaluate("(src) => { (0, eval)(src); }", readBotJs());
         if (!isBotLoaded()) {
             throw new IllegalStateException("Не удалось загрузить bot.js: window.bot не появился");
@@ -240,18 +242,59 @@ public class GameBridge implements AutoCloseable {
     }
 
     /**
-     * Читает bot.js: с диска, если задано {@code wow.bot-js-path}, иначе из classpath.
-     * При заданном пути файл читается при каждой загрузке — пересборка не нужна.
+     * Читает модули bot.js по порядку из manifest.txt и склеивает их через ";\n".
+     * Если задано {@code wow.bot-js-dir}, модули читаются с диска при каждой загрузке
+     * (пересборка не нужна), иначе — из classpath.
      */
     private String readBotJs() {
-        String path = properties.botJsPath();
-        if (path == null) {
-            return readResource(BOT_JS_RESOURCE);
+        String dir = properties.botJsDir();
+        List<String> modules = readBotModules(dir);
+
+        StringBuilder js = new StringBuilder();
+        for (String module : modules) {
+            String source = readBotModule(dir, module).stripTrailing();
+            if (source.isEmpty()) {
+                continue;
+            }
+            if (!js.isEmpty()) {
+                js.append(BOT_MODULE_JOINER);
+            }
+            js.append(source);
         }
+        return js.toString();
+    }
+
+    /** Список модулей из manifest.txt: по одному имени на строку, # — комментарий. */
+    private static List<String> readBotModules(String dir) {
+        String manifestPath = dir == null ? BOT_MANIFEST_RESOURCE : dir + "/manifest.txt";
+        String manifest = dir == null
+                ? readResource(BOT_MANIFEST_RESOURCE)
+                : readFile(Path.of(dir, "manifest.txt"));
+
+        List<String> modules = manifest.lines()
+                .map(String::strip)
+                .filter(line -> !line.isEmpty() && !line.startsWith("#"))
+                .toList();
+        if (modules.isEmpty()) {
+            throw new IllegalStateException("Манифест модулей бота пуст: " + manifestPath);
+        }
+        return modules;
+    }
+
+    private static String readBotModule(String dir, String module) {
+        if (module.contains("..") || module.contains("/") || module.contains("\\")) {
+            throw new IllegalStateException("Недопустимое имя модуля в manifest.txt: " + module);
+        }
+        return dir == null
+                ? readResource(BOT_MODULE_PREFIX + module)
+                : readFile(Path.of(dir, module));
+    }
+
+    private static String readFile(Path path) {
         try {
-            return Files.readString(Path.of(path), StandardCharsets.UTF_8);
+            return Files.readString(path, StandardCharsets.UTF_8);
         } catch (IOException e) {
-            throw new IllegalStateException("Не удалось прочитать bot.js по пути " + path, e);
+            throw new IllegalStateException("Не удалось прочитать " + path, e);
         }
     }
 
