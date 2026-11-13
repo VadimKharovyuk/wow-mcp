@@ -12,6 +12,7 @@ import jakarta.annotation.PostConstruct;
 import jakarta.annotation.PreDestroy;
 import java.sql.Timestamp;
 import java.time.Instant;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
@@ -155,20 +156,37 @@ public class DbService {
         }
     }
 
-    public List<Map<String, Object>> querySpots(int zone) {
+    /**
+     * Тёплые места охоты в зоне: убийства за последние 30 дней сгруппированы по сетке 1×1,
+     * берутся только клетки с >= 2 убийствами, для мобов уровня в [minLvl, maxLvl].
+     */
+    public List<Map<String, Object>> querySpots(int zone, int minLvl, int maxLvl) {
         if (!enabled) return List.of();
         try {
-            return jdbc.queryForList("""
-                    SELECT floor(x)::int AS gx, floor(y)::int AS gy,
-                           count(*) AS kills,
-                           avg(x) AS avg_x, avg(y) AS avg_y,
-                           avg(mob_level) AS avg_mob_level,
-                           max(killed_at) AS last_kill
+            return jdbc.query("""
+                    SELECT round(avg(x)::numeric, 2)  AS x,
+                           round(avg(y)::numeric, 2)  AS y,
+                           count(*)                   AS kills,
+                           round(avg(mob_level))      AS lvl,
+                           max(killed_at)             AS last_kill
                     FROM mob_kill
-                    WHERE zone = ?
-                    GROUP BY floor(x)::int, floor(y)::int
-                    ORDER BY count(*) DESC
-                    LIMIT 30""", zone);
+                    WHERE zone = :zone
+                      AND killed_at > now() - interval '30 days'
+                      AND (mob_level IS NULL OR mob_level BETWEEN :minLvl AND :maxLvl)
+                    GROUP BY floor(x / 1.0), floor(y / 1.0)
+                    HAVING count(*) >= 2
+                    ORDER BY kills DESC
+                    LIMIT 40""",
+                    new Object[]{zone, minLvl, maxLvl},
+                    (rs, rowNum) -> {
+                        Map<String, Object> spot = new LinkedHashMap<>();
+                        spot.put("x", rs.getDouble("x"));
+                        spot.put("y", rs.getDouble("y"));
+                        spot.put("kills", rs.getLong("kills"));
+                        spot.put("lvl", rs.getDouble("lvl"));
+                        spot.put("last_kill", rs.getTimestamp("last_kill"));
+                        return spot;
+                    });
         } catch (Exception e) {
             log.warn("Не удалось прочитать spots: {}", e.getMessage());
             return List.of();

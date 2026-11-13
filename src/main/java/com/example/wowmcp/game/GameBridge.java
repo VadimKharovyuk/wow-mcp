@@ -53,6 +53,8 @@ public class GameBridge implements AutoCloseable {
     // чтобы поддерживать режим разработки wow.lua-dir.
 
     private static final long LUA_LINE_PAUSE_MS = 300;
+    /** Чанк Lua-кода для одной строки чата WoW: ≤ 200 БАЙТ (лимит строки чата — 255 БАЙТ, обёртка /run … [==[ … ]==] ~30 символов). */
+    private static final int LUA_CHUNK_SIZE = 200;
     private static final long STATE_TIME_WINDOW_MS = 1000;
     /** Пауза после bot.stop() перед удалением бота: чтобы клавиши успели отпуститься. */
     private static final long RELOAD_RELEASE_KEYS_PAUSE_MS = 200;
@@ -649,6 +651,9 @@ public class GameBridge implements AutoCloseable {
      */
     private void runLuaSetup(long attemptDeadline) {
         List<String> luaSetup = readLuaSetupLines();
+        List<String> luaModules = readLuaModuleNames(properties.luaDir());
+        int luaChunkCount = luaModules.isEmpty() ? 0 : splitLuaChunks(readLuaModulesCombined(properties.luaDir())).size();
+        log.info("Lua-модули: {} файлов, {} кусков", luaModules.size(), luaChunkCount);
         log.info("Выполняю Lua-подготовку ({} строк)", luaSetup.size());
         page.evaluate("() => { const c = document.getElementById('canvas'); if (c) c.focus(); }");
         for (String line : luaSetup) {
@@ -756,15 +761,44 @@ public class GameBridge implements AutoCloseable {
             if (combined.indexOf('|') >= 0) {
                 throw new IllegalStateException("В Lua-исходниках найден символ '|': он экранируется чатом WoW, используй 'or' или string.char(124)");
             }
-            int chunkSize = 200;
-            for (int i = 0; i < combined.length(); i += chunkSize) {
-                String chunk = combined.substring(i, Math.min(i + chunkSize, combined.length()));
+            for (String chunk : splitLuaChunks(combined)) {
                 lines.add("/run _L=(_L or \"\")..[==[" + chunk + "]==]");
             }
             lines.add("/run local f,e=loadstring(_L) _L=nil if f then f() else print(\"LUA ERR\",e) end");
         }
         lines.add("/run B[30]=" + luaVersion());
         return List.copyOf(lines);
+    }
+
+    /**
+     * Чистит Lua-исходник под отправку одной строки в чат WoW: снимает комментарии,
+     * заменяет переносы строк на пробел, требует чистый ASCII и режет на куски ≤ 200 БАЙТ
+     * (строка чата WoW — максимум 255 БАЙТ, обёртка /run … [==[ … ]==] занимает ~30 символов).
+     */
+    static List<String> splitLuaChunks(String source) {
+        StringBuilder sb = new StringBuilder();
+        for (String rawLine : source.split("\n", -1)) {
+            String code = rawLine;
+            int commentIdx = code.indexOf("--");
+            if (commentIdx >= 0) code = code.substring(0, commentIdx);
+            if (sb.length() > 0) sb.append(' ');
+            sb.append(code);
+        }
+        String cleaned = sb.toString().replace("\r", " ").replace("\n", " ").trim();
+        if (cleaned.isEmpty()) return List.of();
+        cleaned.codePoints().forEach(cp -> {
+            if (cp > 127) {
+                throw new IllegalStateException(
+                        "Lua-исходник содержит не-ASCII символы (U+" + cp + "): отправка в чат WoW разрешена только для чистого ASCII");
+            }
+        });
+        List<String> chunks = new ArrayList<>();
+        for (int i = 0; i < cleaned.length(); ) {
+            int end = Math.min(i + LUA_CHUNK_SIZE, cleaned.length());
+            chunks.add(cleaned.substring(i, end));
+            i = end;
+        }
+        return chunks;
     }
 
     /** Конкатенирует содержимое lua-модулей (classpath или диск). */

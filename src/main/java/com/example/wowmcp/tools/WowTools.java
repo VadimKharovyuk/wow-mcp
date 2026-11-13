@@ -34,6 +34,10 @@ public class WowTools {
     private static final int WAIT_JOB_DEFAULT_SECONDS = 30;
     private static final int WAIT_JOB_MAX_SECONDS = 60;
 
+    /** Значения по умолчанию для фильтра уровня цели в подборе точек. */
+    private static final int DEFAULT_MIN_LVL_DIFF = -5;
+    private static final int DEFAULT_MAX_LVL_DIFF = 2;
+
     private static final ObjectMapper JSON = JsonMapper.builder().build();
 
     private final GameBridge bridge;
@@ -123,7 +127,11 @@ public class WowTools {
             Автоматическая охота вокруг текущей точки: найти подходящего моба, подойти, \
             убить, собрать добычу, отдохнуть, повторить. Работает в фоне. Возвращается по \
             лимиту убийств/времени или при проблеме (смерть, застрял, сумки полные, мобов нет). \
-            Во время охоты вызывай wait_job; статистика — в поле grind.""")
+            Во время охоты вызывай wait_job; статистика — в поле grind.
+
+            Если в базе есть места прошедших убийств в этой зоне — бот ходит по ним (быстрее), \
+            иначе ищет вокруг. Параметр radius ограничивает зону охоты вокруг точки старта. \
+            respawnSec — через сколько секунд после визита место снова считается «тёплым».""")
     public String grind(
             @ToolParam(required = false, description = "Радиус охоты вокруг старта, 0.5..10 (по умолчанию 2.5)")
             Double radius,
@@ -140,7 +148,11 @@ public class WowTools {
             @ToolParam(required = false, description = "Слот лечения в отдыхе, '0'..'9' (по умолчанию '4')")
             String healKey,
             @ToolParam(required = false, description = "Слот питья в отдыхе, '0'..'9' (по умолчанию '0')")
-            String drinkKey) {
+            String drinkKey,
+            @ToolParam(required = false, description = "Использовать базу тёплых точек охоты, true/false (по умолчанию true)")
+            Boolean useSpots,
+            @ToolParam(required = false, description = "Через сколько секунд место снова считается тёплым, 60..1800 (по умолчанию 240)")
+            Integer respawnSec) {
         Map<String, Object> opts = new LinkedHashMap<>();
         if (radius != null) {
             if (!Double.isFinite(radius) || radius < 0.5 || radius > 10) {
@@ -190,8 +202,32 @@ public class WowTools {
             }
             opts.put("drinkKey", drinkKey);
         }
+        if (respawnSec != null) {
+            if (respawnSec < 60 || respawnSec > 1800) {
+                throw new IllegalArgumentException("respawnSec должен быть от 60 до 1800");
+            }
+            opts.put("respawnSec", respawnSec);
+        }
+
+        // Тёплые точки охоты из БД (задача 4б): только если БД доступна и useSpots не false.
+        List<Map<String, Object>> spots = List.of();
+        if (useSpots == null || useSpots) {
+            if (db.isEnabled()) {
+                GameState state = GameState.parse(bridge.report());
+                int minLvl = state.pLvl() + (minLvlDiff == null ? DEFAULT_MIN_LVL_DIFF : minLvlDiff);
+                int maxLvl = state.pLvl() + (maxLvlDiff == null ? DEFAULT_MAX_LVL_DIFF : maxLvlDiff);
+                spots = db.querySpots(state.zone(), minLvl, maxLvl);
+                if (!spots.isEmpty()) {
+                    opts.put("spots", spots);
+                }
+            }
+        }
         List<Object> args = opts.isEmpty() ? List.of() : List.of(opts);
-        return jsonResult(bridge.start("grind", args));
+        String startResult = bridge.start("grind", args);
+        Map<String, Object> response = new LinkedHashMap<>();
+        response.put("result", startResult);
+        response.put("spots", spots.size());
+        return JSON.writeValueAsString(response);
     }
 
     @Tool(name = "look_around", description = """
@@ -232,16 +268,22 @@ public class WowTools {
 
     @Tool(name = "spots", description = """
             Что бот знает о текущей зоне: убийства сгруппированы по сетке 1×1 единица карты \
-            (центр, количество, средний уровень моба, последнее убийство). Топ-30 по количеству. \
-            Без БД — сообщение «база не настроена».""")
-    public String spots() {
+            (центр, количество, средний уровень моба, последнее убийство). Только места с >= 2 \
+            убийствами за 30 дней. Топ-30 по количеству. Без БД — сообщение «база не настроена».""")
+    public String spots(
+            @ToolParam(required = false, description = "Минимальная разница уровней цели, -10..5 (по умолчанию -5)")
+            Integer minLvlDiff,
+            @ToolParam(required = false, description = "Максимальная разница уровней цели, -10..5 (по умолчанию 2)")
+            Integer maxLvlDiff) {
         bridge.ensureReady();
         GameState state = GameState.parse(bridge.report());
         int zone = state.zone();
         if (!db.isEnabled()) {
             return JSON.writeValueAsString(Map.of("result", "база не настроена", "zone", zone));
         }
-        List<Map<String, Object>> rows = db.querySpots(zone);
+        int diffMin = minLvlDiff == null ? DEFAULT_MIN_LVL_DIFF : minLvlDiff;
+        int diffMax = maxLvlDiff == null ? DEFAULT_MAX_LVL_DIFF : maxLvlDiff;
+        List<Map<String, Object>> rows = db.querySpots(zone, state.pLvl() + diffMin, state.pLvl() + diffMax);
         Map<String, Object> result = new LinkedHashMap<>();
         result.put("zone", zone);
         result.put("spots", rows);

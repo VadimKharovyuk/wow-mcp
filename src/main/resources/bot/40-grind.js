@@ -12,7 +12,9 @@ Object.assign(bot, {
     drinkKey: '0',      // питьё в отдыхе
     maxKills: 10,       // 0 = без лимита
     maxMinutes: 30,
+    respawnSec: 240,    // через сколько секунд место из базы снова считается «тёплым»
   },
+  grindSpots: [],
   grindStats: null,
 
   // null — цель подходит; иначе строка-причина отказа
@@ -27,7 +29,18 @@ Object.assign(bot, {
   },
 
   // Tab по кругу: 3 нажатия, поворот ~60°, и так 6 раз (полный оборот)
-  async findTarget() {
+  async findTarget({ quick = false } = {}) {
+    if (quick) {
+      // быстрый режим для проверки конкретной точки: один оборот Tab, без lookAround
+      for (let i = 0; i < 6 && this.grinding; i++) {
+        await this.tap('TAB'); await sleep(250);
+        const s = this.state();
+        if (!this.targetProblem(s)) return s;
+      }
+      if (!this.grinding) return null;
+      await chat('/cleartarget');
+      return null;
+    }
     for (let turn = 0; turn < 2 && this.grinding; turn++) {
       for (let i = 0; i < 3 && this.grinding; i++) {
         await this.tap('TAB'); await sleep(250);
@@ -71,12 +84,26 @@ Object.assign(bot, {
     return null;
   },
 
+  // лучшее «тёплое» место внутри радиуса охоты: много убийств, близко, давно не были, не пустовало
+  pickSpot(s, anchor, cfg) {
+    const now = Date.now();
+    let best = null, bestScore = 0;
+    for (const p of this.grindSpots || []) {
+      if (Math.hypot(p.x - anchor.x, p.y - anchor.y) > cfg.radius) continue;       // вне зоны охоты
+      if (p.visitedAt && now - p.visitedAt < cfg.respawnSec * 1000) continue;      // ещё не респавнулось
+      const dist = Math.hypot(p.x - s.x, p.y - s.y) + 0.3;                        // от текущей позиции
+      const score = p.kills * Math.pow(0.5, p.empty) / dist;                    // пустые места теряют вес
+      if (score > bestScore) { bestScore = score; best = p; }
+    }
+    return best;
+  },
+
   async grind(opts = {}) {
     const cfg = Object.assign(this.grindCfg, opts || {});
     this.grinding = true;
     const anchor = this.state(), t0 = Date.now();
-    const st = this.grindStats = { kills: 0, loots: 0, rests: 0, wanders: 0, skipped: 0,
-                                   anchor: { x: anchor.x, y: anchor.y }, startedAt: t0 };
+    this.grindSpots = (opts.spots || []).map(p => ({ ...p, visitedAt: 0, empty: 0 }));
+    const st = this.grindStats = { kills: 0, loots: 0, rests: 0, wanders: 0, skipped: 0, spotVisits: 0, spotHits: 0, spots: (opts.spots || []).length, anchor: { x: anchor.x, y: anchor.y }, startedAt: t0 };
     const out = r => { this.stop(); return { result: r, stats: st, ...this.state() }; };
 
     while (this.grinding) {
@@ -98,12 +125,32 @@ Object.assign(bot, {
         continue;
       }
 
-      const tgt = await this.findTarget();
+      const hasSpots = (this.grindSpots || []).length > 0;
+      const tgt = await this.findTarget({ quick: hasSpots });
       if (!this.grinding) break;
       if (tgt) {
         if (!(await this.approach())) { st.skipped++; await chat('/cleartarget'); continue; }
         const p = await this.fightAndLoot(st); if (p) return out(p);
         continue;
+      }
+
+      if (hasSpots) {
+        const spot = this.pickSpot(s, anchor, cfg);
+        if (spot) {
+          st.spotVisits++;
+          const m = await this.moveTo(spot.x, spot.y, { tol: 0.4 });
+          if (m.result === 'бой') continue;                 // напали по дороге — цикл сам отобьётся
+          spot.visitedAt = Date.now();
+          const t2 = await this.findTarget({ quick: false }); // на месте — полный осмотр
+          if (t2) {
+            st.spotHits++;
+            if (!(await this.approach())) { st.skipped++; await chat('/cleartarget'); }
+            else { const p = await this.fightAndLoot(st); if (p) return out(p); }
+          } else {
+            spot.empty++;
+          }
+          continue;
+        }
       }
 
       st.wanders++;                                         // никого — побродить внутри радиуса

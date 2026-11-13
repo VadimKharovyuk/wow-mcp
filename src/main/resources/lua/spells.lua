@@ -66,9 +66,8 @@ local function scan()
       local usable = IsUsableAction(slot) and 1 or 0
       local cdStart, cdDur = GetActionCooldown(slot)
       local ready = (usable == 1 and cdDur == 0) and 1 or 0
-      local inRange = IsActionInRange(slot)
-      if inRange == nil then inRange = -1
-      elseif inRange then inRange = 1 else inRange = 0 end
+      local r = IsActionInRange(slot)
+      local inRange = (r == nil) and -1 or ((r == 1) and 1 or 0)
       local hash = H(name)
       local entry = {hash=hash, spellId=sid, slot=slot, keyCode=kc, mods=mods, ready=ready, inRange=inRange}
       local prev = byHash[hash]
