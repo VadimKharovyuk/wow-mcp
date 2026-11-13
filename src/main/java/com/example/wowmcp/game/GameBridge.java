@@ -22,6 +22,9 @@ import java.util.concurrent.Callable;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 import java.util.function.Supplier;
 
 /**
@@ -48,8 +51,34 @@ public class GameBridge implements AutoCloseable {
     /** Пауза после bot.stop() перед удалением бота: чтобы клавиши успели отпуститься. */
     private static final long RELOAD_RELEASE_KEYS_PAUSE_MS = 200;
 
+    /** Сколько раз пробуем Lua-подготовку, прежде чем сдаться. */
+    private static final int LUA_SETUP_ATTEMPTS = 2;
+    /** Общий бюджет на всю подготовку бота (все попытки вместе). */
+    private static final long READY_TIMEOUT_MS = 20_000;
+    /** Страховка на стороне Java: подготовка + сам вызов инструмента. */
+    private static final long READY_OPERATION_TIMEOUT_MS = READY_TIMEOUT_MS + 5_000;
+
     private static final String LUA_NOT_FOUND_MESSAGE =
             "Lua-таблица не найдена: проверь, что персонаж в игре и чат не занят";
+
+    private static final String READY_TIMEOUT_MESSAGE =
+            "Lua-подготовка не уложилась в " + (READY_TIMEOUT_MS / 1000) + " с (попыток: "
+                    + LUA_SETUP_ATTEMPTS + "). "
+                    + "Игра на паузе или окно Chrome свёрнуто? Разверни окно игры и повтори.";
+
+    private static final String NO_RESPONSE_MESSAGE =
+            "Игра не ответила за " + (READY_OPERATION_TIMEOUT_MS / 1000) + " с. "
+                    + "Игра на паузе или окно Chrome свёрнуто? Разверни окно игры и повтори.";
+
+    /**
+     * {@code bot.find()} с таймаутом на стороне страницы: если таймеры вкладки
+     * заморожены, промис не повиснет навсегда, а вернёт {@code timeout}.
+     */
+    private static final String FIND_WITH_TIMEOUT_JS =
+            "(ms) => Promise.race(["
+                    + "bot.find().then(() => 'ok', e => 'error:' + (e && e.message ? e.message : e)),"
+                    + "new Promise(resolve => setTimeout(() => resolve('timeout'), ms))"
+                    + "])";
 
     private final WowProperties properties;
 
@@ -74,7 +103,7 @@ public class GameBridge implements AutoCloseable {
 
     /** Сырой JSON от {@code bot.report()} с предварительной проверкой готовности бота. */
     public String report() {
-        return onPlaywrightThread(() -> retryOnDisconnect(() -> {
+        return onPlaywrightThread(READY_OPERATION_TIMEOUT_MS, () -> retryOnDisconnect(() -> {
             ensureReadyInternal();
             return (String) evaluate("() => bot.report()");
         }));
@@ -87,7 +116,7 @@ public class GameBridge implements AutoCloseable {
 
     /** Запускает фоновую задачу бота ({@code bot.start(name, ...args)}). */
     public String start(String name, List<?> args) {
-        return onPlaywrightThread(() -> retryOnDisconnect(() -> {
+        return onPlaywrightThread(READY_OPERATION_TIMEOUT_MS, () -> retryOnDisconnect(() -> {
             ensureReadyInternal();
             Object result = page.evaluate("(p) => bot.start(p.name, ...p.args)",
                     Map.of("name", name, "args", args));
@@ -104,7 +133,7 @@ public class GameBridge implements AutoCloseable {
 
     /** Проверяет, что bot.js загружен, Lua-таблица найдена и игра не перезагружалась. */
     public void ensureReady() {
-        onPlaywrightThread(() -> retryOnDisconnect(() -> {
+        onPlaywrightThread(READY_OPERATION_TIMEOUT_MS, () -> retryOnDisconnect(() -> {
             ensureReadyInternal();
             return null;
         }));
@@ -118,7 +147,7 @@ public class GameBridge implements AutoCloseable {
      * Lua-подготовка и поиск таблицы.
      */
     public String reloadBot() {
-        return onPlaywrightThread(() -> retryOnDisconnect(() -> {
+        return onPlaywrightThread(READY_OPERATION_TIMEOUT_MS, () -> retryOnDisconnect(() -> {
             log.info("Перезагружаю bot.js, старый бот останавливается");
             page.evaluate("() => { if (window.bot) window.bot.stop(); }");
             sleep(RELOAD_RELEASE_KEYS_PAUSE_MS);
@@ -204,6 +233,9 @@ public class GameBridge implements AutoCloseable {
         try {
             return action.get();
         } catch (PlaywrightException e) {
+            if (Thread.currentThread().isInterrupted()) {
+                throw e;
+            }
             log.warn("Соединение с игрой упало ({}). Переподключаюсь и повторяю.", e.getMessage());
             forgetPage();
             ensureConnected();
@@ -216,17 +248,73 @@ public class GameBridge implements AutoCloseable {
     // ------------------------------------------------------------------
 
     private void ensureReadyInternal() {
+        long deadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(READY_TIMEOUT_MS);
         if (!isBotLoaded()) {
             injectBot();
         }
-        if (isAddrUnset()) {
-            runLuaSetup();
-        } else if (!isStateTimeAlive()) {
-            log.warn("bot.state().time не меняется — похоже, интерфейс игры перезагружался. "
-                    + "Повторяю Lua-подготовку.");
-            page.evaluate("() => { window.bot.addr = null; }");
-            runLuaSetup();
+        if (!needsLuaSetup(deadline)) {
+            return;
         }
+
+        RuntimeException lastError = null;
+        for (int attempt = 1; attempt <= LUA_SETUP_ATTEMPTS; attempt++) {
+            long attemptDeadline = attemptDeadline(deadline, attempt);
+            long budgetMs = remainingMs(attemptDeadline);
+            if (budgetMs <= 0) {
+                log.warn("Lua-подготовка: попытка {}/{} не запущена — общий таймаут {} с исчерпан",
+                        attempt, LUA_SETUP_ATTEMPTS, READY_TIMEOUT_MS / 1000);
+                break;
+            }
+            log.info("Lua-подготовка: попытка {}/{} (бюджет {} мс, всего осталось {} мс)",
+                    attempt, LUA_SETUP_ATTEMPTS, budgetMs, remainingMs(deadline));
+            try {
+                runLuaSetup(attemptDeadline);
+                return;
+            } catch (RuntimeException e) {
+                lastError = e;
+                log.warn("Lua-подготовка: попытка {}/{} не удалась: {}",
+                        attempt, LUA_SETUP_ATTEMPTS, e.getMessage());
+            }
+            if (attempt < LUA_SETUP_ATTEMPTS) {
+                log.info("Повторяю Lua-подготовку");
+            }
+        }
+        throw lastError != null ? lastError : new IllegalStateException(READY_TIMEOUT_MESSAGE);
+    }
+
+    /**
+     * Пора ли выполнять Lua-подготовку: таблицы ещё нет или интерфейс игры
+     * перезагружался ({@code bot.state().time} не тикает).
+     */
+    private boolean needsLuaSetup(long deadline) {
+        if (isAddrUnset()) {
+            return true;
+        }
+        if (isStateTimeAlive(deadline)) {
+            return false;
+        }
+        log.warn("bot.state().time не меняется — похоже, интерфейс игры перезагружался. "
+                + "Повторяю Lua-подготовку.");
+        page.evaluate("() => { window.bot.addr = null; }");
+        return true;
+    }
+
+    /** Бюджет попытки: остаток общего времени делится поровну между оставшимися попытками. */
+    private static long attemptDeadline(long deadline, int attempt) {
+        int attemptsLeft = LUA_SETUP_ATTEMPTS - attempt + 1;
+        return System.nanoTime() + remainingNanos(deadline) / attemptsLeft;
+    }
+
+    private static long remainingNanos(long deadline) {
+        return Math.max(0, deadline - System.nanoTime());
+    }
+
+    private static long remainingMs(long deadline) {
+        return TimeUnit.NANOSECONDS.toMillis(remainingNanos(deadline));
+    }
+
+    private static IllegalStateException readyTimeout() {
+        return new IllegalStateException(READY_TIMEOUT_MESSAGE);
     }
 
     private boolean isBotLoaded() {
@@ -304,9 +392,13 @@ public class GameBridge implements AutoCloseable {
     }
 
     /** GetTime() из игры должен тикать; если нет — интерфейс перезагрузили. */
-    private boolean isStateTimeAlive() {
+    private boolean isStateTimeAlive(long deadline) {
+        long windowMs = Math.min(STATE_TIME_WINDOW_MS, remainingMs(deadline));
+        if (windowMs <= 0) {
+            return false;
+        }
         double before = stateTime();
-        sleep(STATE_TIME_WINDOW_MS);
+        sleep(windowMs);
         double after = stateTime();
         return before > 0 && after != before;
     }
@@ -316,15 +408,35 @@ public class GameBridge implements AutoCloseable {
         return value instanceof Number number ? number.doubleValue() : 0d;
     }
 
-    private void runLuaSetup() {
+    /**
+     * Вводит Lua-строки в чат и ищет таблицу. Ни один шаг не ждёт дольше
+     * {@code attemptDeadline}: если игра зависла или вкладка заморожена,
+     * бросаем {@link #READY_TIMEOUT_MESSAGE}, а не висим.
+     */
+    private void runLuaSetup(long attemptDeadline) {
         log.info("Выполняю Lua-подготовку ({} строк)", LUA_SETUP.size());
         page.evaluate("() => { const c = document.getElementById('canvas'); if (c) c.focus(); }");
         for (String line : LUA_SETUP) {
+            long remaining = remainingMs(attemptDeadline);
+            if (remaining <= 0) {
+                throw readyTimeout();
+            }
             page.evaluate("t => chat(t)", line);
-            sleep(LUA_LINE_PAUSE_MS);
+            sleep(Math.min(LUA_LINE_PAUSE_MS, remainingMs(attemptDeadline)));
         }
-        // Playwright дождётся промиса, который вернёт find().
-        page.evaluate("() => bot.find()");
+        long remaining = remainingMs(attemptDeadline);
+        if (remaining <= 0) {
+            throw readyTimeout();
+        }
+        // Playwright дождётся промиса, который вернёт find(); сам find ограничен
+        // таймаутом, чтобы не зависнуть, если таймеры страницы заморожены.
+        Object result = page.evaluate(FIND_WITH_TIMEOUT_JS, remaining);
+        if ("timeout".equals(result)) {
+            throw readyTimeout();
+        }
+        if (!"ok".equals(result)) {
+            throw new IllegalStateException("bot.find() завершился с ошибкой: " + result);
+        }
         if (isAddrUnset()) {
             throw new IllegalStateException(LUA_NOT_FOUND_MESSAGE);
         }
@@ -340,9 +452,27 @@ public class GameBridge implements AutoCloseable {
     // ------------------------------------------------------------------
 
     private <T> T onPlaywrightThread(Callable<T> task) {
+        return onPlaywrightThread(0, task);
+    }
+
+    /**
+     * Выполняет задачу в потоке Playwright. {@code timeoutMs > 0} — жёсткий предел
+     * ожидания: если игра не отвечает (вкладка заморожена), не висим, а прерываем задачу
+     * и возвращаем понятную ошибку.
+     */
+    private <T> T onPlaywrightThread(long timeoutMs, Callable<T> task) {
+        Future<T> future = playwrightThread.submit(task);
         try {
-            return playwrightThread.submit(task).get();
+            return timeoutMs > 0
+                    ? future.get(timeoutMs, TimeUnit.MILLISECONDS)
+                    : future.get();
+        } catch (TimeoutException e) {
+            future.cancel(true);
+            log.error("Операция в игре не уложилась в {} мс — прерываю и переподключаюсь", timeoutMs);
+            forgetPage();
+            throw new IllegalStateException(NO_RESPONSE_MESSAGE, e);
         } catch (InterruptedException e) {
+            future.cancel(true);
             Thread.currentThread().interrupt();
             throw new IllegalStateException("Операция прервана", e);
         } catch (ExecutionException e) {
