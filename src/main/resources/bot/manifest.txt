@@ -5,4 +5,6 @@
 20-fight.js
 30-loot.js
 40-grind.js
+50-scan.js
+60-track.js
  

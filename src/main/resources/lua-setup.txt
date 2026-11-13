@@ -7,4 +7,7 @@
 /run function X() local t="target" local d=UnitLevel(t) B[18]=d==-1 and 99 or d-UnitLevel("player") B[19]=(UnitIsPlayer(t) and 1 or 0)+(UnitClassification(t)~="normal" and 2 or 0) end
 /run function Y() local t="target" B[19]=B[19]+(UnitIsTapped(t) and not UnitIsTappedByPlayer(t) and 4 or 0) B[20]=(CheckInteractDistance(t,4) and 1 or 0)+(CheckInteractDistance(t,3) and 2 or 0) end
 /run function Z() B[21]=UnitPower("player",0)/math.max(1,UnitPowerMax("player",0)) end
-/run local w=W W=function() w() X() Y() Z() end
+/run function M() local m="mouseover" B[22]=(UnitExists(m) and UnitCanAttack("player",m) and not UnitIsDead(m)) and 1 or 0 B[23]=UnitLevel(m)-UnitLevel("player") B[25]=GetCurrentMapContinent()*100+GetCurrentMapZone() B[26]=UnitLevel("player") end
+/run function K(_,e,_,s,g) if e=="ZONE_CHANGED_NEW_AREA" then SetMapToCurrentZone() elseif s=="PARTY_KILL" and g==UnitGUID("player") then B[24]=B[24]+1 end end
+/run local f=CreateFrame("Frame") f:RegisterEvent("ZONE_CHANGED_NEW_AREA") f:RegisterEvent("COMBAT_LOG_EVENT_UNFILTERED") f:SetScript("OnEvent",K)
+/run local w=W W=function() w() X() Y() Z() M() end

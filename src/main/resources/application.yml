@@ -22,3 +22,7 @@ wow:
   # Chrome должен быть запущен с --remote-debugging-port=9222
   cdp-url: http://localhost:9222
   page-url-contains: lasthavens.com/play
+  db:
+    url: jdbc:postgresql://localhost:5432/wow_bot
+    username: vadim
+    password: ""

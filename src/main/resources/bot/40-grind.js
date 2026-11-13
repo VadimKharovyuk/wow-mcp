@@ -27,7 +27,7 @@ Object.assign(bot, {
 
   // Tab по кругу: 3 нажатия, поворот ~60°, и так 6 раз (полный оборот)
   async findTarget() {
-    for (let turn = 0; turn < 6 && this.grinding; turn++) {
+    for (let turn = 0; turn < 2 && this.grinding; turn++) {
       for (let i = 0; i < 3 && this.grinding; i++) {
         await this.tap('TAB'); await sleep(250);
         const s = this.state();
@@ -35,6 +35,9 @@ Object.assign(bot, {
       }
       await this.hold('A', 330); await sleep(150);
     }
+    if (!this.grinding) return null;
+    const r = await this.lookAround({ minLvlDiff: this.grindCfg.minLvlDiff, maxLvlDiff: this.grindCfg.maxLvlDiff });
+    if (r && r.found) return this.state();
     await chat('/cleartarget');
     return null;
   },

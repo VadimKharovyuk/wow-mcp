@@ -31,7 +31,12 @@ public record GameState(
         int tFlags,
         int tDist,
         double manaPct,
-        Object grind) {
+        Object grind,
+        boolean moAlive,
+        int moLvl,
+        int kills,
+        int zone,
+        int pLvl) {
 
     /**
      * Текущая задача бота. У завершённой задачи {@code result} содержит итог,

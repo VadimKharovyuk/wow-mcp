@@ -1,5 +1,6 @@
 package com.example.wowmcp.tools;
 
+import com.example.wowmcp.db.DbService;
 import com.example.wowmcp.game.GameBridge;
 import com.example.wowmcp.game.GameState;
 import org.slf4j.Logger;
@@ -16,6 +17,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.UUID;
 import java.util.concurrent.TimeUnit;
 
 /**
@@ -34,9 +36,14 @@ public class WowTools {
     private static final ObjectMapper JSON = JsonMapper.builder().build();
 
     private final GameBridge bridge;
+    private final DbService db;
 
-    public WowTools(GameBridge bridge) {
+    private volatile String lastRecordSession;
+    private volatile java.time.Instant lastRecordStart;
+
+    public WowTools(GameBridge bridge, DbService db) {
         this.bridge = bridge;
+        this.db = db;
     }
 
     @Tool(name = "get_state", description = """
@@ -166,6 +173,60 @@ public class WowTools {
         }
         List<Object> args = opts.isEmpty() ? List.of() : List.of(opts);
         return jsonResult(bridge.start("grind", args));
+    }
+
+    @Tool(name = "look_around", description = """
+            Найти цель сканом экрана мышью (вся видимая область, не только впереди). \
+            Работает в фоне — результат смотри через wait_job.""")
+    public String lookAround() {
+        return jsonResult(bridge.start("lookAround", List.of()));
+    }
+
+    @Tool(name = "record_start", description = """
+            Включить режим обучения: бот пишет путь и убийства в БД, пока играет человек. \
+            Возвращает sessionId для record_stop.""")
+    public String recordStart() {
+        bridge.ensureReady();
+        String sessionId = UUID.randomUUID().toString();
+        bridge.eval("(s) => { bot.recording = true; bot.recSession = s; return bot.recSession; }", sessionId);
+        lastRecordSession = sessionId;
+        lastRecordStart = java.time.Instant.now();
+        return JSON.writeValueAsString(Map.of("result", "запись начата", "sessionId", sessionId));
+    }
+
+    @Tool(name = "record_stop", description = """
+            Остановить запись. Возвращает сводку сессии: точек пути и убийств (из БД, если настроена).""")
+    public String recordStop() {
+        bridge.ensureReady();
+        bridge.eval("() => { bot.recording = false; return 'ok'; }");
+        String sid = lastRecordSession;
+        long pathPoints = db.isEnabled() ? db.countPathPoints(sid) : 0;
+        long kills = db.isEnabled() && lastRecordStart != null ? db.countKillsSince(lastRecordStart) : 0;
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("result", "запись остановлена");
+        result.put("sessionId", sid);
+        result.put("pathPoints", pathPoints);
+        result.put("kills", kills);
+        result.put("dbEnabled", db.isEnabled());
+        return JSON.writeValueAsString(result);
+    }
+
+    @Tool(name = "spots", description = """
+            Что бот знает о текущей зоне: убийства сгруппированы по сетке 1×1 единица карты \
+            (центр, количество, средний уровень моба, последнее убийство). Топ-30 по количеству. \
+            Без БД — сообщение «база не настроена».""")
+    public String spots() {
+        bridge.ensureReady();
+        GameState state = GameState.parse(bridge.report());
+        int zone = state.zone();
+        if (!db.isEnabled()) {
+            return JSON.writeValueAsString(Map.of("result", "база не настроена", "zone", zone));
+        }
+        List<Map<String, Object>> rows = db.querySpots(zone);
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("zone", zone);
+        result.put("spots", rows);
+        return JSON.writeValueAsString(result);
     }
 
     @Tool(name = "wait_job", description = """

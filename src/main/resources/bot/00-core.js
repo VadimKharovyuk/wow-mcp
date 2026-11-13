@@ -77,7 +77,9 @@ window.bot = {
       hp: g(5), hpMax: g(6), fight: g(7) === 1, time: +g(8).toFixed(1),
       target: g(9) === 1, targetHp: g(10), enemy: g(11) === 1,
       ready: g(12), err: g(13), errTime: +g(14).toFixed(2), moDead: g(15) === 1, lootN: g(16),
-      tLvl: g(17), tFlags: g(18), tDist: g(19), manaPct: +g(20).toFixed(2)    };
+      tLvl: g(17), tFlags: g(18), tDist: g(19), manaPct: +g(20).toFixed(2),
+      moAlive: g(21) === 1, moLvl: g(22), kills: g(23), zone: g(24), pLvl: g(25),
+       luaVer: g(29)    };
   },
 
   key(k, down) {
@@ -92,6 +94,18 @@ window.bot = {
     keys = [].concat(keys);
     keys.forEach(k => this.key(k, true)); await sleep(ms); keys.forEach(k => this.key(k, false));
   },
+  mouse(fx, fy, type = 'mousemove', button = 0) {
+    const c = CANVAS(), r = c.getBoundingClientRect();
+    c.dispatchEvent(new MouseEvent(type, {
+      clientX: r.left + fx * r.width, clientY: r.top + fy * r.height,
+      button, buttons: type === 'mousedown' ? (button === 2 ? 2 : 1) : 0, bubbles: true
+    }));
+  },
+  async click(fx, fy, button = 0) {
+    this.mouse(fx, fy, 'mousemove'); await sleep(40);
+    this.mouse(fx, fy, 'mousedown', button); await sleep(60); this.mouse(fx, fy, 'mouseup', button);
+  },
+  dispose() { if (this.trackInt) { clearInterval(this.trackInt); this.trackInt = null; } },
   release() { this.running = false; for (const k in this.held) this.key(k, false); },
   stop()    { this.grinding = false; this.release(); },
 

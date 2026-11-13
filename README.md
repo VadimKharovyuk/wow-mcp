@@ -19,6 +19,9 @@ Lua-подготовку из `lua-setup.txt`. Дальше LLM-клиент (Op
 | `loot` | Найти труп синтетической мышью и собрать добычу (фоном) |
 | `rest` | Отдыхать (лечение/питьё/естественный) до порогов HP/маны (фоном) |
 | `grind` | Авто-охота вокруг точки: моб → бой → лут → отдых → повтор (фоном) |
+| `look_around` | Найти цель сканом экрана мышью (вся видимая область) (фоном) |
+| `record_start` / `record_stop` | Режим обучения: запись пути и убийств в БД |
+| `spots` | Точки убийств в текущей зоне (из БД) |
 | `wait_job(maxSeconds)` | Ждать завершения задачи, опрос раз в секунду. По умолчанию 30 с, максимум 60 с |
 | `stop` | Экстренная остановка |
 | `set_rotation(rotationJson)` | Задать приоритет умений: слоты 1–9 + `maxHpPct`, `outOfCombatOnly`, `waitAfter` |
@@ -232,6 +235,11 @@ java -Dwow.bot-js-dir=/Users/vadim/Downloads/wow-mcp/src/main/resources/bot \
 - **`Unsupported type of argument` в логе** — в `page.evaluate(...)` передали `long`.
   Playwright сериализует только `Integer`/`Double` (для таймаутов есть
   `GameBridge.toPageTimeoutMs`).
+
+## База данных (необязательно)
+
+Настройки — в `application.yml` (секция `wow.db`): `url`, `username`, `password`.
+Если `url` пустой или БД недоступна, сервер стартует и работает как раньше (события не сохраняются, в лог WARN).
 
 ## Структура
 
