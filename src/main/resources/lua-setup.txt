@@ -12,3 +12,4 @@
 /run local f=CreateFrame("Frame") f:RegisterEvent("ZONE_CHANGED_NEW_AREA") f:RegisterEvent("COMBAT_LOG_EVENT_UNFILTERED") f:SetScript("OnEvent",K)
 /run function P() B[27]=UnitHealthMax("target") end
 /run local w=W W=function() w() X() Y() Z() M() P() end
+/run hooksecurefunc("UseAction",function(s) B[28]=B[28]+1 B[29]=s end)

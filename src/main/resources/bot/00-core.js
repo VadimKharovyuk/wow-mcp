@@ -104,11 +104,13 @@ window.bot = {
       tLvl: g(17), tFlags: g(18), tDist: g(19), manaPct: +g(20).toFixed(2),
       moAlive: g(21) === 1, moLvl: g(22), kills: g(23), zone: g(24), pLvl: g(25),
       targetHpMax: g(26), targetHpPct: g(26) > 0 ? +(g(10) / g(26)).toFixed(2) : 0,
+      useCount: g(27), useSlot: g(28),
       luaVer: g(29)
     };
   },
 
   key(k, down) {
+    if (down) this.lastBotPressAt = Date.now();
     if (!!this.held[k] === down) return;
     const [code, key, keyCode] = KEYS[k];
     CANVAS().dispatchEvent(new KeyboardEvent(down ? 'keydown' : 'keyup',

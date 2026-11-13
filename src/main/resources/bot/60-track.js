@@ -2,6 +2,7 @@
 Object.assign(bot, {
   events: [], lastKills: null, lastTLvl: null, recording: false, recSession: null, lastPathPt: null,
   profile: null, keyLogger: null, fightStartedAt: null, lastHumanKey: null,
+  lastBotPressAt: 0, lastUseCount: null,
 
   trackTick() {
     if (this.addr === null) return;
@@ -21,32 +22,31 @@ Object.assign(bot, {
         this.events.push({ type: 'path', zone: s.zone, x: s.x, y: s.y, session: this.recSession, at: Date.now() });
       }
     }
+    // Отслеживание нажатий умений через игру (UseAction hook): рост useCount.
+    if (this.lastUseCount === null) this.lastUseCount = s.useCount;
+    if (s.useCount > this.lastUseCount) {
+      const slot = s.useSlot;
+      const now = Date.now();
+      const isBot = (now - (this.lastBotPressAt || 0)) < 400;
+      if (!isBot && slot >= 1 && slot <= 9 && this.profile) {
+        if (s.fight && !this.fightStartedAt) this.fightStartedAt = now;
+        if (!s.fight) this.fightStartedAt = null;
+        this.events.push({ type: 'key', profile: this.profile, key: String(slot),
+          hp: +(s.hp / s.hpMax).toFixed(2), mana: s.manaPct, ready: s.ready, fight: s.fight,
+          target: s.target && s.enemy, targetHpPct: s.targetHpPct,
+          sinceFightMs: this.fightStartedAt ? now - this.fightStartedAt : null,
+          prevKey: this.lastHumanKey ? this.lastHumanKey.key : null,
+          prevKeyMs: this.lastHumanKey ? now - this.lastHumanKey.at : null, at: now });
+        this.lastHumanKey = { key: String(slot), at: now };
+      }
+      this.lastUseCount = s.useCount;
+    }
     if (this.events.length > 5000) this.events.splice(0, this.events.length - 5000);
   },
-  startTracker() { if (!this.trackInt) this.trackInt = setInterval(() => { try { this.trackTick(); } catch (e) {} }, 500); },
+  startTracker() { if (!this.trackInt) this.trackInt = setInterval(() => { try { this.trackTick(); } catch (e) {} }, 150); },
   drainEvents() { const e = this.events; this.events = []; return JSON.stringify(e); },
 
-  installKeyLogger() {
-    if (this.keyLogger) return;
-    this.keyLogger = e => {
-      if (!e.isTrusted || e.repeat) return;
-      const m = /^Digit([0-9])$/.exec(e.code); if (!m) return;
-      const active = document.activeElement;
-      if (active && active.id === 'wow-text') return;
-      if (this.addr === null || !this.profile) return;
-      const s = this.state(), now = Date.now();
-      if (s.fight && !this.fightStartedAt) this.fightStartedAt = now;
-      if (!s.fight) this.fightStartedAt = null;
-      this.events.push({ type: 'key', profile: this.profile, key: m[1],
-        hp: +(s.hp / s.hpMax).toFixed(2), mana: s.manaPct, ready: s.ready, fight: s.fight,
-        target: s.target && s.enemy, targetHpPct: s.targetHpPct,
-        sinceFightMs: this.fightStartedAt ? now - this.fightStartedAt : null,
-        prevKey: this.lastHumanKey ? this.lastHumanKey.key : null,
-        prevKeyMs: this.lastHumanKey ? now - this.lastHumanKey.at : null, at: now });
-      this.lastHumanKey = { key: m[1], at: now };
-    };
-    document.addEventListener('keydown', this.keyLogger, true);
-  },
+  // keydown-слушатель отключён: нажатия ловятся через UseAction в trackTick.
+  installKeyLogger() { /* disabled */ },
 });
 bot.startTracker();
-bot.installKeyLogger();
