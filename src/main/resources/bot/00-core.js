@@ -20,17 +20,41 @@ window.press = async (code, key, keyCode, ms = 60, target = CANVAS()) => {
   target.dispatchEvent(new KeyboardEvent('keyup', o));
 };
 
+// ===== печать в чат игры =====
+// Игра сообщает о поле ввода через wowTextFocus(mode): 0 — закрыто, 1/2 — открыто
+// (2 — режим «без касания» на компьютере; фокус в #wow-text при этом НЕ ставится,
+// поэтому document.activeElement для проверки не годится). Перехватываем один раз.
+if (!window.__wowTextFocusOrig) window.__wowTextFocusOrig = window.wowTextFocus;
+window.__gameEditMode = window.__gameEditMode || 0;
+window.wowTextFocus = m => {
+  window.__gameEditMode = m;
+  return window.__wowTextFocusOrig && window.__wowTextFocusOrig(m);
+};
+
 // написать строку в чат игры и отправить (например, chat('/run print(1)'))
+// Предохранители:
+//  - экран входа (поле пароля) — ничего не печатаем ('not in world');
+//  - чат не открылся после Enter (2 попытки) — честная ошибка ('chat did not open'),
+//    а не печать «в пустоту».
 window.chat = async text => {
-  await press('Enter', 'Enter', 13);
-  await sleep(200);
+  const field = () => document.getElementById('wow-text');
+  const isPasswordScreen = () => !!field() && field().type === 'password';
+  if (isPasswordScreen()) throw new Error('not in world');
+
+  for (let attempt = 1; ; attempt++) {
+    await press('Enter', 'Enter', 13);
+    await sleep(250);
+    if (isPasswordScreen()) throw new Error('not in world');
+    if (window.__gameEditMode !== 0) break;                 // игра открыла поле чата
+    if (attempt >= 2) throw new Error('chat did not open');
+  }
   for (const ch of text) wowKey(ch.codePointAt(0));
   await sleep(100);
   wowKey(13);
 };
 
 window.KEYS = { W:['KeyW','w',87], A:['KeyA','a',65], D:['KeyD','d',68], S:['KeyS','s',83],
-                SPACE:['Space',' ',32], TAB:['Tab','Tab',9] };
+  SPACE:['Space',' ',32], TAB:['Tab','Tab',9] };
 for (let n = 1; n <= 9; n++) KEYS[n] = ['Digit' + n, '' + n, 48 + n];
 KEYS[0] = ['Digit0', '0', 48];
 KEYS['0'] = KEYS[0];
@@ -79,14 +103,16 @@ window.bot = {
       ready: g(12), err: g(13), errTime: +g(14).toFixed(2), moDead: g(15) === 1, lootN: g(16),
       tLvl: g(17), tFlags: g(18), tDist: g(19), manaPct: +g(20).toFixed(2),
       moAlive: g(21) === 1, moLvl: g(22), kills: g(23), zone: g(24), pLvl: g(25),
-       luaVer: g(29)    };
+      targetHpMax: g(26), targetHpPct: g(26) > 0 ? +(g(10) / g(26)).toFixed(2) : 0,
+      luaVer: g(29)
+    };
   },
 
   key(k, down) {
     if (!!this.held[k] === down) return;
     const [code, key, keyCode] = KEYS[k];
     CANVAS().dispatchEvent(new KeyboardEvent(down ? 'keydown' : 'keyup',
-      { key, code, keyCode, which: keyCode, bubbles: true }));
+        { key, code, keyCode, which: keyCode, bubbles: true }));
     this.held[k] = down;
   },
   async tap(k) { this.key(k, true); await sleep(60); this.key(k, false); },
@@ -105,7 +131,7 @@ window.bot = {
     this.mouse(fx, fy, 'mousemove'); await sleep(40);
     this.mouse(fx, fy, 'mousedown', button); await sleep(60); this.mouse(fx, fy, 'mouseup', button);
   },
-  dispose() { if (this.trackInt) { clearInterval(this.trackInt); this.trackInt = null; } },
+  dispose() { if (this.trackInt) { clearInterval(this.trackInt); this.trackInt = null; } if (this.keyLogger) { document.removeEventListener('keydown', this.keyLogger, true); this.keyLogger = null; } },
   release() { this.running = false; for (const k in this.held) this.key(k, false); },
   stop()    { this.grinding = false; this.release(); },
 
@@ -115,7 +141,7 @@ window.bot = {
     if (this.job.status === 'running') return 'уже занят: ' + this.job.name;
     this.job = { name, status: 'running', started: Date.now() };
     this[name](...args).then(r => { this.job = { name, status: 'done', ...r }; })
-                       .catch(e => { this.job = { name, status: 'error', error: '' + e }; });
+        .catch(e => { this.job = { name, status: 'error', error: '' + e }; });
     return 'запущено: ' + name;
   },
   report() {

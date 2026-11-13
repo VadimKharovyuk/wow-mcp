@@ -1,6 +1,7 @@
 package com.example.wowmcp.db;
 
 import com.example.wowmcp.game.GameBridge;
+import com.example.wowmcp.learn.RotationLearner;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.scheduling.annotation.Scheduled;
@@ -19,11 +20,13 @@ public class EventCollector {
 
     private final GameBridge bridge;
     private final DbService db;
+    private final RotationLearner learner;
     private final ObjectMapper json = new ObjectMapper();
 
-    public EventCollector(GameBridge bridge, DbService db) {
+    public EventCollector(GameBridge bridge, DbService db, RotationLearner learner) {
         this.bridge = bridge;
         this.db = db;
+        this.learner = learner;
     }
 
     @Scheduled(fixedDelay = 3000)
@@ -46,10 +49,21 @@ public class EventCollector {
             log.warn("Не удалось разобрать события: {}", e.getMessage());
             return;
         }
-        int kills = 0, paths = 0;
+        int kills = 0, paths = 0, keys = 0;
+        String lastProfile = null;
         for (Map<String, Object> ev : events) {
             String type = String.valueOf(ev.get("type"));
-            if ("kill".equals(type)) {
+            if ("key".equals(type)) {
+                keys++;
+                if (db.isEnabled()) {
+                    String profile = str(ev.get("profile"));
+                    lastProfile = profile;
+                    db.insertKeyPress(profile, str(ev.get("key")), asDouble(ev.get("hp")), asDouble(ev.get("mana")),
+                            asInt(ev.get("ready")), asBool(ev.get("fight")), asBool(ev.get("target")),
+                            asDouble(ev.get("targetHpPct")), asInt(ev.get("sinceFightMs")), str(ev.get("prevKey")),
+                            asInt(ev.get("prevKeyMs")), asLong(ev.get("at")));
+                }
+            } else if ("kill".equals(type)) {
                 kills++;
                 if (db.isEnabled()) {
                     Integer zone = asInt(ev.get("zone"));
@@ -75,8 +89,30 @@ public class EventCollector {
                 }
             }
         }
-        if (kills + paths > 0) {
-            log.debug("Собрано событий: kills={}, paths={}", kills, paths);
+        if (kills + paths + keys > 0) {
+            log.debug("Собрано событий: kills={}, paths={}, keys={}", kills, paths, keys);
+        }
+
+        // Автообучение: если профиль активен и накопилось >=40 новых нажатий
+        if (db.isEnabled() && lastProfile != null) {
+            try {
+                String activeProfile = String.valueOf(bridge.eval("() => bot.profile"));
+                if (lastProfile.equals(activeProfile)) {
+                    int total = db.queryKeyPresses(lastProfile).size();
+                    if (total - learner.lastLearnedCount(lastProfile) >= 40) {
+                        RotationLearner.Result res = learner.learn(lastProfile);
+                        if (res != null) {
+                            String rotJson = json.writeValueAsString(res.rotation());
+                            bridge.eval("(r) => { bot.rotation = r; return 'ok'; }", res.rotation());
+                            String statsJson = res.stats() == null ? null : json.writeValueAsString(res.stats());
+                            db.upsertRotationProfile(lastProfile, rotJson, res.samples(), statsJson);
+                            log.info("Автообучение профиля '{}': {}", lastProfile, res.rotation());
+                        }
+                    }
+                }
+            } catch (Exception e) {
+                log.warn("Автообучение не удалось: {}", e.getMessage());
+            }
         }
     }
 
@@ -95,5 +131,18 @@ public class EventCollector {
     private static long asLong(Object v) {
         if (v instanceof Number n) return n.longValue();
         try { return Long.parseLong(String.valueOf(v)); } catch (NumberFormatException e) { return 0; }
+    }
+
+    private static String str(Object v) {
+        return v == null ? null : String.valueOf(v).trim();
+    }
+
+    private static Boolean asBool(Object v) {
+        if (v == null) return null;
+        if (v instanceof Boolean b) return b;
+        String s = String.valueOf(v).toLowerCase();
+        if ("true".equals(s) || "1".equals(s)) return true;
+        if ("false".equals(s) || "0".equals(s)) return false;
+        return null;
     }
 }

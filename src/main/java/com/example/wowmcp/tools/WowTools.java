@@ -3,6 +3,7 @@ package com.example.wowmcp.tools;
 import com.example.wowmcp.db.DbService;
 import com.example.wowmcp.game.GameBridge;
 import com.example.wowmcp.game.GameState;
+import com.example.wowmcp.learn.RotationLearner;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.ai.tool.annotation.Tool;
@@ -37,20 +38,23 @@ public class WowTools {
 
     private final GameBridge bridge;
     private final DbService db;
+    private final RotationLearner learner;
 
     private volatile String lastRecordSession;
     private volatile java.time.Instant lastRecordStart;
 
-    public WowTools(GameBridge bridge, DbService db) {
+    public WowTools(GameBridge bridge, DbService db, RotationLearner learner) {
         this.bridge = bridge;
         this.db = db;
+        this.learner = learner;
     }
 
     @Tool(name = "get_state", description = """
             Показывает состояние персонажа: координаты x/y в зоне (0–100), процент HP, \
             идёт ли бой, есть ли цель и какая задача сейчас выполняется. Поле ready — маска \
             готовых умений панели 1–9, moDead — под курсором труп, lootN — предметов в окне добычи, \
-            tLvl/tFlags/tDist — уровень/флаги/дистанция цели, manaPct — мана, grind — статистика гринда.""")
+            tLvl/tFlags/tDist — уровень/флаги/дистанция цели, manaPct — мана, grind — статистика гринда. \
+            Если вернулась ошибка "не в мире" — не повторять вызов, сообщить игроку.""")
     public String getState() {
         return bridge.report();
     }
@@ -275,10 +279,121 @@ public class WowTools {
 
     @Tool(name = "get_rotation", description = """
             Показывает текущий приоритет умений (массив слотов панели 1–9 с необязательными \
-            maxHpPct, outOfCombatOnly и waitAfter).""")
+            maxHpPct, outOfCombatOnly и waitAfter) и статистику обучения по клавишам.""")
     public String getRotation() {
         bridge.ensureReady();
-        return String.valueOf(bridge.eval("() => JSON.stringify(bot.rotation)"));
+        Object rotation = bridge.eval("() => JSON.stringify(bot.rotation)");
+        String profile = null;
+        try {
+            profile = String.valueOf(bridge.eval("() => bot.profile"));
+        } catch (RuntimeException ignored) {
+        }
+        Map<String, Object> result = new LinkedHashMap<>();
+        try {
+            result.put("rotation", JSON.readValue(String.valueOf(rotation), Object.class));
+        } catch (RuntimeException e) {
+            result.put("rotation", rotation);
+        }
+        result.put("profile", "null".equals(profile) ? null : profile);
+        if (db.isEnabled() && profile != null && !"null".equals(profile)) {
+            Map<String, Object> row = db.loadRotationProfile(profile);
+            if (row != null && row.get("stats_json") != null) {
+                try {
+                    result.put("stats", JSON.readValue(String.valueOf(row.get("stats_json")), Object.class));
+                } catch (RuntimeException e) {
+                    result.put("stats", row.get("stats_json"));
+                }
+            } else {
+                result.put("stats", null);
+            }
+            result.put("samples", row == null ? null : row.get("samples"));
+        } else {
+            result.put("stats", null);
+            result.put("samples", null);
+        }
+        return JSON.writeValueAsString(result);
+    }
+
+    @Tool(name = "set_profile", description = """
+            Задать активный профиль персонажа (имя). Бот начинает записывать нажатия игрока \
+            для этого профиля и загружает сохранённую ротацию (если есть). \
+            Без БД работает в памяти: нажатия не сохраняются, обучение недоступно.""")
+    public String setProfile(
+            @ToolParam(description = "Имя профиля (например paladin, mage)") String name) {
+        if (name == null || name.isBlank()) {
+            throw new IllegalArgumentException("name не должен быть пустым");
+        }
+        bridge.ensureReady();
+        bridge.eval("(p) => { bot.profile = p; return bot.profile; }", name);
+        Map<String, Object> loaded = null;
+        if (db.isEnabled()) {
+            loaded = db.loadRotationProfile(name);
+            if (loaded != null && loaded.get("rotation_json") != null) {
+                Object rotation = JSON.readValue(String.valueOf(loaded.get("rotation_json")), Object.class);
+                bridge.eval("(r) => { bot.rotation = r; return 'ok'; }", rotation);
+            }
+            db.touchProfile(name);
+        }
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("result", "профиль установлен: " + name);
+        result.put("profile", name);
+        result.put("rotationLoaded", loaded != null && loaded.get("rotation_json") != null);
+        result.put("dbEnabled", db.isEnabled());
+        if (!db.isEnabled()) {
+            result.put("note", "база не настроена — нажатия не сохраняются, обучение недоступно");
+        }
+        return JSON.writeValueAsString(result);
+    }
+
+    @Tool(name = "learn_rotation", description = """
+            Принудительно переучить ротацию активного профиля по накопленным нажатиям и применить её.""")
+    public String learnRotation() {
+        bridge.ensureReady();
+        String profile = String.valueOf(bridge.eval("() => bot.profile"));
+        if ("null".equals(profile) || profile.isBlank()) {
+            return JSON.writeValueAsString(Map.of("result", "профиль не задан — сначала set_profile"));
+        }
+        if (!db.isEnabled()) {
+            return JSON.writeValueAsString(Map.of("result", "база не настроена — обучение недоступно",
+                    "dbEnabled", false));
+        }
+        RotationLearner.Result res = learner.learn(profile);
+        if (res == null) {
+            return JSON.writeValueAsString(Map.of("result", "недостаточно данных для обучения", "profile", profile));
+        }
+        String rotJson = JSON.writeValueAsString(res.rotation());
+        bridge.eval("(r) => { bot.rotation = r; return 'ok'; }", res.rotation());
+        String statsJson = res.stats() == null ? null : JSON.writeValueAsString(res.stats());
+        db.upsertRotationProfile(profile, rotJson, res.samples(), statsJson);
+        learner.setLastLearnedCount(profile, db.queryKeyPresses(profile).size());
+        return JSON.writeValueAsString(Map.of("result", "ротация выучена и применена", "profile", profile,
+                "rotation", res.rotation(), "samples", res.samples()));
+    }
+
+    @Tool(name = "reset_learning", description = """
+            УДАЛЯЕТ все нажатия и выученную ротацию профиля (необратимо).""")
+    public String resetLearning(
+            @ToolParam(description = "Имя профиля") String name) {
+        if (name == null || name.isBlank()) {
+            throw new IllegalArgumentException("name не должен быть пустым");
+        }
+        if (!db.isEnabled()) {
+            // В памяти: просто сбросить профиль, если активен
+            bridge.ensureReady();
+            String active = String.valueOf(bridge.eval("() => bot.profile"));
+            if (name.equals(active)) {
+                bridge.eval("() => { bot.profile = null; return 'ok'; }");
+            }
+            return JSON.writeValueAsString(Map.of("result", "профиль сброшен (база не настроена)", "profile", name,
+                    "dbEnabled", false));
+        }
+        db.deleteProfileData(name);
+        bridge.ensureReady();
+        String active = String.valueOf(bridge.eval("() => bot.profile"));
+        if (name.equals(active)) {
+            bridge.eval("() => { bot.profile = null; return 'ok'; }");
+        }
+        return JSON.writeValueAsString(Map.of("result", "данные профиля удалены", "profile", name));
     }
 
     @Tool(name = "reload_bot", description = """

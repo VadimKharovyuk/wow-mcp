@@ -1,6 +1,8 @@
 package com.example.wowmcp.game;
 
 import com.example.wowmcp.config.WowProperties;
+import com.example.wowmcp.db.DbService;
+import com.example.wowmcp.learn.RotationLearner;
 import com.microsoft.playwright.Browser;
 import com.microsoft.playwright.BrowserContext;
 import com.microsoft.playwright.Page;
@@ -87,6 +89,8 @@ public class GameBridge implements AutoCloseable {
                     + "])";
 
     private final WowProperties properties;
+    private final DbService db;
+    private final RotationLearner learner;
 
     private final ExecutorService playwrightThread = Executors.newSingleThreadExecutor(runnable -> {
         Thread thread = new Thread(runnable, "wow-playwright");
@@ -109,8 +113,14 @@ public class GameBridge implements AutoCloseable {
     /** Время bot.state().time на момент начала Lua-подготовки — для определения, тикали ли таймеры страницы. */
     private volatile double initialTimeForSetup;
 
-    public GameBridge(WowProperties properties) {
+    /** Блокировка автоматических подготовок после 2 неудач подряд (сбрасывается reload_bot). */
+    private volatile boolean luaBlocked = false;
+    private volatile int consecutiveLuaFailures = 0;
+
+    public GameBridge(WowProperties properties, DbService db, RotationLearner learner) {
         this.properties = properties;
+        this.db = db;
+        this.learner = learner;
     }
 
     // ------------------------------------------------------------------
@@ -188,6 +198,8 @@ public class GameBridge implements AutoCloseable {
      * Lua-подготовка и поиск таблицы.
      */
     public String reloadBot() {
+        luaBlocked = false;
+        consecutiveLuaFailures = 0;
         busy.incrementAndGet();
         try {
             return onPlaywrightThread(READY_OPERATION_TIMEOUT_MS, () -> retryOnDisconnect(() -> {
@@ -196,11 +208,37 @@ public class GameBridge implements AutoCloseable {
                 page.evaluate("() => { if (window.bot) window.bot.stop(); }");
                 sleep(RELOAD_RELEASE_KEYS_PAUSE_MS);
                 page.evaluate("() => { delete window.bot; }");
-                ensureReadyInternal();
+                try {
+                    ensureReadyInternal();
+                } catch (RuntimeException e) {
+                    log.warn("reload_bot: подготовка не удалась: {}", e.getMessage());
+                    return "бот перезагружен, но подготовка не удалась: " + e.getMessage();
+                }
                 return "бот перезагружен: " + botJsSource();
             }));
         } finally {
             busy.decrementAndGet();
+        }
+    }
+
+    /** Автозагрузка последнего профиля после загрузки нового window.bot. */
+    private void autoLoadProfile() {
+        if (db == null || !db.isEnabled() || learner == null) return;
+        String profile = db.findLastUsedProfile();
+        if (profile == null || profile.isBlank()) return;
+        try {
+            page.evaluate("(p) => { bot.profile = p; }", profile);
+            Map<String, Object> row = db.loadRotationProfile(profile);
+            if (row != null && row.get("rotation_json") != null) {
+                tools.jackson.databind.ObjectMapper om = tools.jackson.databind.json.JsonMapper.builder().build();
+                Object rotation = om.readValue(String.valueOf(row.get("rotation_json")), Object.class);
+                page.evaluate("(r) => { bot.rotation = r; return 'ok'; }", rotation);
+            }
+            db.touchProfile(profile);
+            log.info("Автозагрузка профиля '{}': ротация {}", profile,
+                    row == null ? "по умолчанию" : row.get("rotation_json"));
+        } catch (Exception e) {
+            log.warn("Автозагрузка профиля не удалась: {}", e.getMessage());
         }
     }
 
@@ -315,9 +353,15 @@ public class GameBridge implements AutoCloseable {
     // ------------------------------------------------------------------
 
     private void ensureReadyInternal() {
+        if (luaBlocked) {
+            throw new IllegalStateException("подготовка заблокирована после неудач, зайди в игру и вызови reload_bot");
+        }
+
         long deadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(READY_TIMEOUT_MS);
+        boolean injected = false;
         if (!isBotLoaded()) {
             injectBot();
+            injected = true;
         }
 
         // Сначала пробуем найти таблицу без ввода Lua: она могла остаться в игре.
@@ -332,6 +376,10 @@ public class GameBridge implements AutoCloseable {
             int ver = (v instanceof Number n) ? n.intValue() : -1;
             if (ver == LUA_VERSION && isStateTimeAlive(deadline)) {
                 log.info("Lua-таблица уже в игре (версия {}) — подготовка пропущена", ver);
+                consecutiveLuaFailures = 0;
+                if (injected) {
+                    autoLoadProfile();
+                }
                 return;
             }
         }
@@ -339,6 +387,7 @@ public class GameBridge implements AutoCloseable {
         log.info("...выполняю подготовку");
 
         RuntimeException lastError = null;
+        boolean notInWorld = false;
         for (int attempt = 1; attempt <= LUA_SETUP_ATTEMPTS; attempt++) {
             long attemptDeadline = attemptDeadline(deadline, attempt);
             long budgetMs = remainingMs(attemptDeadline);
@@ -352,15 +401,36 @@ public class GameBridge implements AutoCloseable {
             initialTimeForSetup = safeStateTime();
             try {
                 runLuaSetup(attemptDeadline);
+                consecutiveLuaFailures = 0;
+                if (injected) {
+                    autoLoadProfile();
+                }
                 return;
             } catch (RuntimeException e) {
                 lastError = e;
+                consecutiveLuaFailures++;
+                if (e.getMessage() != null && e.getMessage().toLowerCase().contains("not in world")) {
+                    notInWorld = true;
+                    if (consecutiveLuaFailures >= 2) {
+                        luaBlocked = true;
+                    }
+                    break;
+                }
+                if (consecutiveLuaFailures >= 2) {
+                    luaBlocked = true;
+                }
                 log.warn("Lua-подготовка: попытка {}/{} не удалась: {}",
                         attempt, LUA_SETUP_ATTEMPTS, e.getMessage());
             }
             if (attempt < LUA_SETUP_ATTEMPTS) {
                 log.info("Повторяю Lua-подготовку");
             }
+        }
+        if (notInWorld) {
+            throw new IllegalStateException("Персонаж не в мире (экран входа). Зайди в игру вручную", lastError);
+        }
+        if (luaBlocked) {
+            throw new IllegalStateException("подготовка заблокирована после неудач, зайди в игру и вызови reload_bot");
         }
         throw lastError != null ? lastError : readyTimeout();
     }

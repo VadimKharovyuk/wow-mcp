@@ -21,6 +21,8 @@ public record GameState(
         double time,
         boolean target,
         double targetHp,
+        double targetHpMax,
+        double targetHpPct,
         boolean enemy,
         long ready,
         int err,

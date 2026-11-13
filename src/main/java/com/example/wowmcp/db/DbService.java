@@ -79,6 +79,32 @@ public class DbService {
                   recorded_at timestamptz NOT NULL
                 )""");
         jdbc.execute("CREATE INDEX IF NOT EXISTS path_point_session_idx ON path_point (session_id)");
+        jdbc.execute("""
+                CREATE TABLE IF NOT EXISTS key_press (
+                  id            bigserial PRIMARY KEY,
+                  profile       varchar(40) NOT NULL,
+                  key           char(1)     NOT NULL,
+                  hp            real,
+                  mana          real,
+                  ready         int,
+                  fight         boolean,
+                  target        boolean,
+                  target_hp_pct real,
+                  since_fight_ms int,
+                  prev_key      char(1),
+                  prev_key_ms   int,
+                  pressed_at    timestamptz NOT NULL
+                )""");
+        jdbc.execute("CREATE INDEX IF NOT EXISTS key_press_profile_idx ON key_press (profile, pressed_at)");
+        jdbc.execute("""
+                CREATE TABLE IF NOT EXISTS rotation_profile (
+                  profile       varchar(40) PRIMARY KEY,
+                  rotation_json text        NOT NULL,
+                  samples       int         NOT NULL,
+                  learned_at    timestamptz NOT NULL,
+                  last_used_at  timestamptz NOT NULL,
+                  stats_json    text
+                )""");
     }
 
     public boolean isEnabled() {
@@ -150,6 +176,99 @@ public class DbService {
         } catch (Exception e) {
             log.warn("Не удалось посчитать убийства: {}", e.getMessage());
             return 0;
+        }
+    }
+
+    public void insertKeyPress(String profile, String key, Double hp, Double mana, Integer ready, Boolean fight,
+                               Boolean target, Double targetHpPct, Integer sinceFightMs, String prevKey,
+                               Integer prevKeyMs, long atMillis) {
+        if (!enabled) return;
+        try {
+            jdbc.update(
+                    "INSERT INTO key_press (profile,key,hp,mana,ready,fight,target,target_hp_pct,since_fight_ms,prev_key,prev_key_ms,pressed_at) "
+                            + "VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+                    profile, key, hp, mana, ready, fight, target, targetHpPct, sinceFightMs, prevKey, prevKeyMs,
+                    new Timestamp(atMillis));
+        } catch (Exception e) {
+            log.warn("Не удалось записать нажатие: {}", e.getMessage());
+            disable();
+        }
+    }
+
+    /** Нажатия профиля за последние 14 дней. */
+    public List<Map<String, Object>> queryKeyPresses(String profile) {
+        if (!enabled || profile == null) return List.of();
+        try {
+            return jdbc.queryForList(
+                    "SELECT key, hp, mana, ready, fight, target, target_hp_pct, since_fight_ms, prev_key, prev_key_ms, pressed_at "
+                            + "FROM key_press WHERE profile = ? AND pressed_at >= (now() - interval '14 days') ORDER BY pressed_at",
+                    profile);
+        } catch (Exception e) {
+            log.warn("Не удалось прочитать нажатия: {}", e.getMessage());
+            return List.of();
+        }
+    }
+
+    public void upsertRotationProfile(String profile, String rotationJson, int samples, String statsJson) {
+        if (!enabled) return;
+        try {
+            jdbc.update("""
+                    INSERT INTO rotation_profile (profile, rotation_json, samples, learned_at, last_used_at, stats_json)
+                    VALUES (?,?,?,?,now(),?)
+                    ON CONFLICT (profile) DO UPDATE SET
+                      rotation_json = EXCLUDED.rotation_json,
+                      samples = EXCLUDED.samples,
+                      learned_at = EXCLUDED.learned_at,
+                      last_used_at = now(),
+                      stats_json = EXCLUDED.stats_json""",
+                    profile, rotationJson, samples, new Timestamp(System.currentTimeMillis()), statsJson);
+        } catch (Exception e) {
+            log.warn("Не удалось сохранить профиль ротации: {}", e.getMessage());
+            disable();
+        }
+    }
+
+    public Map<String, Object> loadRotationProfile(String profile) {
+        if (!enabled || profile == null) return null;
+        try {
+            List<Map<String, Object>> rows = jdbc.queryForList(
+                    "SELECT rotation_json, samples, stats_json, last_used_at FROM rotation_profile WHERE profile = ?", profile);
+            return rows.isEmpty() ? null : rows.get(0);
+        } catch (Exception e) {
+            log.warn("Не удалось загрузить профиль ротации: {}", e.getMessage());
+            return null;
+        }
+    }
+
+    public void touchProfile(String profile) {
+        if (!enabled || profile == null) return;
+        try {
+            jdbc.update("UPDATE rotation_profile SET last_used_at = now() WHERE profile = ?", profile);
+        } catch (Exception e) {
+            log.warn("Не удалось обновить last_used_at: {}", e.getMessage());
+        }
+    }
+
+    public void deleteProfileData(String profile) {
+        if (!enabled || profile == null) return;
+        try {
+            jdbc.update("DELETE FROM key_press WHERE profile = ?", profile);
+            jdbc.update("DELETE FROM rotation_profile WHERE profile = ?", profile);
+        } catch (Exception e) {
+            log.warn("Не удалось удалить данные профиля: {}", e.getMessage());
+            disable();
+        }
+    }
+
+    public String findLastUsedProfile() {
+        if (!enabled) return null;
+        try {
+            List<Map<String, Object>> rows = jdbc.queryForList(
+                    "SELECT profile FROM rotation_profile ORDER BY last_used_at DESC LIMIT 1");
+            return rows.isEmpty() ? null : String.valueOf(rows.get(0).get("profile"));
+        } catch (Exception e) {
+            log.warn("Не удалось найти последний профиль: {}", e.getMessage());
+            return null;
         }
     }
 

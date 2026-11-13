@@ -10,4 +10,5 @@
 /run function M() local m="mouseover" B[22]=(UnitExists(m) and UnitCanAttack("player",m) and not UnitIsDead(m)) and 1 or 0 B[23]=UnitLevel(m)-UnitLevel("player") B[25]=GetCurrentMapContinent()*100+GetCurrentMapZone() B[26]=UnitLevel("player") end
 /run function K(_,e,_,s,g) if e=="ZONE_CHANGED_NEW_AREA" then SetMapToCurrentZone() elseif s=="PARTY_KILL" and g==UnitGUID("player") then B[24]=B[24]+1 end end
 /run local f=CreateFrame("Frame") f:RegisterEvent("ZONE_CHANGED_NEW_AREA") f:RegisterEvent("COMBAT_LOG_EVENT_UNFILTERED") f:SetScript("OnEvent",K)
-/run local w=W W=function() w() X() Y() Z() M() end
+/run function P() B[27]=UnitHealthMax("target") end
+/run local w=W W=function() w() X() Y() Z() M() P() end
