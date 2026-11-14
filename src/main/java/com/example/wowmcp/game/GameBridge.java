@@ -11,6 +11,8 @@ import com.microsoft.playwright.PlaywrightException;
 import jakarta.annotation.PreDestroy;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.boot.context.event.ApplicationReadyEvent;
+import org.springframework.context.event.EventListener;
 import org.springframework.stereotype.Component;
 
 import java.io.IOException;
@@ -53,8 +55,8 @@ public class GameBridge implements AutoCloseable {
     // чтобы поддерживать режим разработки wow.lua-dir.
 
     private static final long LUA_LINE_PAUSE_MS = 300;
-    /** Чанк Lua-кода для одной строки чата WoW: ≤ 200 БАЙТ (лимит строки чата — 255 БАЙТ, обёртка /run … [==[ … ]==] ~30 символов). */
-    private static final int LUA_CHUNK_SIZE = 200;
+    /** Чанк Lua-кода для одной строки чата WoW: ≤ 215 БАЙТ (лимит строки чата — 255 БАЙТ, обёртка /run … [==[ … ]==] ~35 символов). */
+    private static final int LUA_CHUNK_SIZE = 215;
     private static final long STATE_TIME_WINDOW_MS = 1000;
     /** Пауза после bot.stop() перед удалением бота: чтобы клавиши успели отпуститься. */
     private static final long RELOAD_RELEASE_KEYS_PAUSE_MS = 200;
@@ -62,9 +64,9 @@ public class GameBridge implements AutoCloseable {
     /** Сколько раз пробуем Lua-подготовку, прежде чем сдаться. */
     private static final int LUA_SETUP_ATTEMPTS = 2;
     /** Общий бюджет на всю подготовку бота (все попытки вместе). */
-    private static final long READY_TIMEOUT_MS = 45_000;
+    private static final long READY_TIMEOUT_MS = 100_000;
     /** Страховка на стороне Java: подготовка + сам вызов инструмента. */
-    private static final long READY_OPERATION_TIMEOUT_MS = READY_TIMEOUT_MS + 5_000;
+    private static final long READY_OPERATION_TIMEOUT_MS = 110_000;
 
     private static final String LUA_NOT_FOUND_MESSAGE =
             "Lua-таблица не найдена: проверь, что персонаж в игре и чат не занят";
@@ -126,6 +128,36 @@ public class GameBridge implements AutoCloseable {
     // ------------------------------------------------------------------
     // Публичный API для инструментов MCP
     // ------------------------------------------------------------------
+
+    /**
+     * Фоновое подключение сразу после старта сервера: находим вкладку игры и, если нужно,
+     * загружаем bot.js. Lua-подготовки здесь нет (она печатает в чат) — только чтобы
+     * события (убийства, применения заклинаний) начали писаться без первой команды.
+     */
+    @EventListener(ApplicationReadyEvent.class)
+    public void connectOnStartup() {
+        playwrightThread.submit(() -> {
+            try {
+                ensureConnected();
+                boolean injected = false;
+                if (!isBotLoaded()) {
+                    injectBot();
+                    autoLoadProfile();
+                    injected = true;
+                }
+                try {
+                    page.evaluate("() => bot.find()");
+                } catch (PlaywrightException e) {
+                    log.debug("Фоновый bot.find() не удался: {}", e.getMessage());
+                }
+                log.info("Фоновое подключение к игре готово (бот {}): события пишутся без вызова инструментов",
+                        injected ? "загружен, профиль " + page.evaluate("() => bot.profile") : "уже был в странице");
+            } catch (RuntimeException e) {
+                log.info("Фоновое подключение к игре не удалось: {} — подключусь при первом вызове инструмента",
+                        e.getMessage());
+            }
+        });
+    }
 
     /** Сырой JSON от {@code bot.report()} с предварительной проверкой готовности бота. */
     public String report() {
@@ -221,13 +253,53 @@ public class GameBridge implements AutoCloseable {
         }
     }
 
+    /** Отправляет KEEP[id]=true в игру батчами (каждая строка <= 200 байт), без /run на каждый предмет. */
+    private void syncKeepItemsToGame() {
+        if (db == null || !db.isEnabled()) return;
+        List<Integer> ids;
+        try {
+            ids = db.listKeepItemIds();
+        } catch (RuntimeException e) {
+            log.warn("Не удалось прочитать keep_item для синхронизации: {}", e.getMessage());
+            return;
+        }
+        if (ids == null || ids.isEmpty()) return;
+        StringBuilder batch = new StringBuilder();
+        for (int id : ids) {
+            String piece = (batch.length() == 0) ? String.valueOf(id) : "," + id;
+            String cmd = "/run for _,i in ipairs({" + batch + piece + "}) do KEEP[i]=true end";
+            if (cmd.getBytes(StandardCharsets.UTF_8).length > 200) {
+                if (batch.length() > 0) {
+                    String send = "/run for _,i in ipairs({" + batch + "}) do KEEP[i]=true end";
+                    page.evaluate("t => chat(t)", send);
+                    sleep(LUA_LINE_PAUSE_MS);
+                }
+                batch = new StringBuilder(String.valueOf(id));
+            } else {
+                if (batch.length() > 0) batch.append(',');
+                else batch = new StringBuilder();
+                batch.append(id);
+            }
+        }
+        if (batch.length() > 0) {
+            String send = "/run for _,i in ipairs({" + batch + "}) do KEEP[i]=true end";
+            page.evaluate("t => chat(t)", send);
+            sleep(LUA_LINE_PAUSE_MS);
+        }
+        log.info("Синхронизировано KEEP предметов в игру: {}", ids.size());
+    }
+
     /** Автозагрузка последнего профиля после загрузки нового window.bot. */
     private void autoLoadProfile() {
         if (db == null || !db.isEnabled() || learner == null) return;
-        String profile = db.findLastUsedProfile();
+        // Сначала явно сохранённый активный профиль (set_profile), иначе — последний использованный.
+        String profile = db.findActiveProfile();
+        if (profile == null || profile.isBlank()) {
+            profile = db.findLastUsedProfile();
+        }
         if (profile == null || profile.isBlank()) return;
         try {
-            page.evaluate("(p) => { bot.profile = p; }", profile);
+            page.evaluate("(p) => bot.setProfile ? bot.setProfile(p) : (bot.profile = p, window.__wowProfile = p)", profile);
             Map<String, Object> row = db.loadRotationProfile(profile);
             if (row != null && row.get("rotation_json") != null) {
                 tools.jackson.databind.ObjectMapper om = tools.jackson.databind.json.JsonMapper.builder().build();
@@ -380,6 +452,7 @@ public class GameBridge implements AutoCloseable {
                 if (injected) {
                     autoLoadProfile();
                 }
+                syncKeepItemsToGame();
                 return;
             }
         }
@@ -405,6 +478,7 @@ public class GameBridge implements AutoCloseable {
                 if (injected) {
                     autoLoadProfile();
                 }
+                syncKeepItemsToGame();
                 return;
             } catch (RuntimeException e) {
                 lastError = e;
@@ -651,9 +725,6 @@ public class GameBridge implements AutoCloseable {
      */
     private void runLuaSetup(long attemptDeadline) {
         List<String> luaSetup = readLuaSetupLines();
-        List<String> luaModules = readLuaModuleNames(properties.luaDir());
-        int luaChunkCount = luaModules.isEmpty() ? 0 : splitLuaChunks(readLuaModulesCombined(properties.luaDir())).size();
-        log.info("Lua-модули: {} файлов, {} кусков", luaModules.size(), luaChunkCount);
         log.info("Выполняю Lua-подготовку ({} строк)", luaSetup.size());
         page.evaluate("() => { const c = document.getElementById('canvas'); if (c) c.focus(); }");
         for (String line : luaSetup) {
@@ -753,15 +824,17 @@ public class GameBridge implements AutoCloseable {
                 .toList();
     }
 
+    /** Результат подготовки Lua-модулей: очищенный/сжатый код и статистика. */
+    record LuaModulesPrepared(int files, int originalBytes, int compressedBytes, List<String> chunks) {}
+
     /** Собирает строки Lua-подготовки: старые однострочники + новые многострочные lua/*.lua (чанками) + версия. */
     private List<String> readLuaSetupLines() {
         List<String> lines = new ArrayList<>(readResourceLines("lua-setup.txt"));
-        String combined = readLuaModulesCombined(properties.luaDir());
-        if (!combined.isEmpty()) {
-            if (combined.indexOf('|') >= 0) {
-                throw new IllegalStateException("В Lua-исходниках найден символ '|': он экранируется чатом WoW, используй 'or' или string.char(124)");
-            }
-            for (String chunk : splitLuaChunks(combined)) {
+        LuaModulesPrepared modules = prepareLuaModules(properties.luaDir());
+        if (!modules.chunks().isEmpty()) {
+            log.info("Lua-модули: {} файлов, {} кусков (до сжатия {} байт, после {} байт)",
+                    modules.files(), modules.chunks().size(), modules.originalBytes(), modules.compressedBytes());
+            for (String chunk : modules.chunks()) {
                 lines.add("/run _L=(_L or \"\")..[==[" + chunk + "]==]");
             }
             lines.add("/run local f,e=loadstring(_L) _L=nil if f then f() else print(\"LUA ERR\",e) end");
@@ -770,21 +843,44 @@ public class GameBridge implements AutoCloseable {
         return List.copyOf(lines);
     }
 
+    /** Читает, сжимает и нарезает Lua-модули. */
+    private LuaModulesPrepared prepareLuaModules(String dir) {
+        List<String> modules = readLuaModuleNames(dir);
+        String combined = readLuaModulesCombined(dir);
+        if (combined.isEmpty()) {
+            return new LuaModulesPrepared(modules.size(), 0, 0, List.of());
+        }
+        if (combined.indexOf('|') >= 0) {
+            throw new IllegalStateException("В Lua-исходниках найден символ '|': он экранируется чатом WoW, используй 'or' или string.char(124)");
+        }
+        int originalBytes = combined.getBytes(StandardCharsets.UTF_8).length;
+        String compressed = compressLua(combined);
+        if (compressed.isEmpty()) {
+            return new LuaModulesPrepared(modules.size(), originalBytes, 0, List.of());
+        }
+        compressed.codePoints().forEach(cp -> {
+            if (cp > 127) {
+                throw new IllegalStateException(
+                        "Lua-исходник содержит не-ASCII символы (U+" + cp + "): отправка в чат WoW разрешена только для чистого ASCII");
+            }
+        });
+        List<String> chunks = new ArrayList<>();
+        for (int i = 0; i < compressed.length(); ) {
+            int end = Math.min(i + LUA_CHUNK_SIZE, compressed.length());
+            chunks.add(compressed.substring(i, end));
+            i = end;
+        }
+        int compressedBytes = compressed.getBytes(StandardCharsets.UTF_8).length;
+        return new LuaModulesPrepared(modules.size(), originalBytes, compressedBytes, chunks);
+    }
+
     /**
      * Чистит Lua-исходник под отправку одной строки в чат WoW: снимает комментарии,
-     * заменяет переносы строк на пробел, требует чистый ASCII и режет на куски ≤ 200 БАЙТ
-     * (строка чата WoW — максимум 255 БАЙТ, обёртка /run … [==[ … ]==] занимает ~30 символов).
+     * сжимает пробелы и убирает пробелы вокруг операторов/разделителей вне строковых
+     * литералов "..." и '...', затем режет на куски.
      */
     static List<String> splitLuaChunks(String source) {
-        StringBuilder sb = new StringBuilder();
-        for (String rawLine : source.split("\n", -1)) {
-            String code = rawLine;
-            int commentIdx = code.indexOf("--");
-            if (commentIdx >= 0) code = code.substring(0, commentIdx);
-            if (sb.length() > 0) sb.append(' ');
-            sb.append(code);
-        }
-        String cleaned = sb.toString().replace("\r", " ").replace("\n", " ").trim();
+        String cleaned = compressLua(source);
         if (cleaned.isEmpty()) return List.of();
         cleaned.codePoints().forEach(cp -> {
             if (cp > 127) {
@@ -799,6 +895,133 @@ public class GameBridge implements AutoCloseable {
             i = end;
         }
         return chunks;
+    }
+
+    /**
+     * Удаляет комментарии, схлопывает пробельные последовательности в один пробел и убирает
+     * пробелы вокруг = , ( ) { } [ ] + - * / < > ~ только вне строковых литералов "..." и '...'.
+     * Не создаёт вне строк последовательности "--", "[[" и "]]", которых не было в исходнике.
+     */
+    static String compressLua(String source) {
+        if (source == null || source.isEmpty()) {
+            return "";
+        }
+        StringBuilder sb = new StringBuilder(source.length());
+        char stringQuote = 0;
+        boolean escaped = false;
+        int len = source.length();
+        for (int i = 0; i < len; i++) {
+            char c = source.charAt(i);
+            if (stringQuote != 0) {
+                sb.append(c);
+                if (escaped) {
+                    escaped = false;
+                } else if (c == '\\') {
+                    escaped = true;
+                } else if (c == stringQuote) {
+                    stringQuote = 0;
+                }
+                continue;
+            }
+            if (c == '"' || c == '\'') {
+                stringQuote = c;
+                sb.append(c);
+                continue;
+            }
+            if (c == '-' && i + 1 < len && source.charAt(i + 1) == '-') {
+                // однострочный комментарий (вне строки) — пропускаем до конца строки
+                while (i < len && source.charAt(i) != '\n' && source.charAt(i) != '\r') {
+                    i++;
+                }
+                if (i < len && sb.length() > 0 && sb.charAt(sb.length() - 1) != ' ') {
+                    sb.append(' ');
+                }
+                continue;
+            }
+            if (Character.isWhitespace(c)) {
+                if (sb.length() > 0 && sb.charAt(sb.length() - 1) != ' ') {
+                    sb.append(' ');
+                }
+                continue;
+            }
+            sb.append(c);
+        }
+        // убираем пробелы вокруг символов (вне строк)
+        return minifySpacesOutsideStrings(sb.toString().trim());
+    }
+
+    private static boolean isTightChar(char c) {
+        return "=,(){}[]+-*/<>~".indexOf(c) >= 0;
+    }
+
+    private static boolean wouldCreateForbiddenPair(char prevC, char nextC) {
+        return (prevC == '-' && nextC == '-')
+                || (prevC == '[' && nextC == '[')
+                || (prevC == ']' && nextC == ']');
+    }
+
+    private static String minifySpacesOutsideStrings(String s) {
+        StringBuilder out = new StringBuilder(s.length());
+        char stringQuote = 0;
+        boolean escaped = false;
+        for (int i = 0; i < s.length(); i++) {
+            char c = s.charAt(i);
+            if (stringQuote != 0) {
+                out.append(c);
+                if (escaped) {
+                    escaped = false;
+                } else if (c == '\\') {
+                    escaped = true;
+                } else if (c == stringQuote) {
+                    stringQuote = 0;
+                }
+                continue;
+            }
+            if (c == '"' || c == '\'') {
+                stringQuote = c;
+                out.append(c);
+                continue;
+            }
+            if (c == ' ') {
+                int prev = out.length() - 1;
+                char prevC = prev >= 0 ? out.charAt(prev) : 0;
+                int j = i + 1;
+                while (j < s.length() && s.charAt(j) == ' ') j++;
+                char nextC = j < s.length() ? s.charAt(j) : 0;
+
+                // не создаём "--", "[[", "]]" там, где их не было
+                if (prev >= 0 && j < s.length() && wouldCreateForbiddenPair(prevC, nextC)) {
+                    if (prevC != ' ') {
+                        out.append(' ');
+                    }
+                    i = j - 1;
+                    continue;
+                }
+
+                // пропускаем пробел, если до него tight-символ
+                if (prev >= 0 && isTightChar(prevC)) {
+                    i = j - 1;
+                    continue;
+                }
+                // пропускаем пробел, если после него tight-символ
+                if (j < s.length() && isTightChar(nextC)) {
+                    i = j - 1; // следующий шаг обработает tight-символ, пробелы съедены
+                    continue;
+                }
+                // схлопнутый одиночный пробел между токенами
+                if (prev >= 0 && prevC != ' ') {
+                    out.append(' ');
+                }
+                i = j - 1;
+                continue;
+            }
+            out.append(c);
+        }
+        // финальный trim возможных хвостовых пробелов
+        int end = out.length();
+        while (end > 0 && out.charAt(end - 1) == ' ') end--;
+        out.setLength(end);
+        return out.toString();
     }
 
     /** Конкатенирует содержимое lua-модулей (classpath или диск). */

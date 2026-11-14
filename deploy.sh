@@ -6,7 +6,9 @@ echo "1/5 Закрываю OpenCode..."
 osascript -e 'quit app "OpenCode"' || true
 sleep 2
 
-echo "2/5 Останавливаю сервер..."
+echo "2/5 Останавливаю службу OpenCode и сервер бота..."
+pkill -f "opencode-cli serve" || true
+pkill -f opencode-pty || true
 pkill -f wow-mcp.jar || true
 
 echo "3/5 Собираю..."
@@ -14,7 +16,7 @@ echo "3/5 Собираю..."
 
 echo "4/5 Проверяю отладочный Chrome..."
 if curl -s --max-time 2 http://localhost:9222/json/version > /dev/null; then
-  echo "    Chrome уже запущен — не трогаю (игра остаётся как есть)."
+  echo "    Chrome уже запущен — не трогаю."
 else
   echo "    Запускаю Chrome с игрой..."
   nohup "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" \

@@ -38,6 +38,11 @@ public class RotationLearner {
     /** Результат обучения. */
     public record Result(List<Map<String, Object>> rotation, Map<String, Object> stats, int samples) {}
 
+    /** Результат попытки обучения по spell_cast: либо успех, либо причина отказа без fallback на key_press. */
+    public record SpellLearn(Result result, boolean hasData, int inCombatCasts, int requiredInCombat) {
+        public boolean isInsufficient() { return hasData && result == null; }
+    }
+
     public boolean isEnabled() {
         return db.isEnabled();
     }
@@ -55,7 +60,8 @@ public class RotationLearner {
     }
 
     /**
-     * Обучиться по профилю. Возвращает null, если данных недостаточно или БД отключена.
+     * Обучиться по профилю по key_press (legacy v1). Возвращает null, если данных недостаточно или БД отключена.
+     * Используется только как fallback, когда spell_cast для профиля полностью пуст.
      */
     public Result learn(String profile) {
         if (!db.isEnabled() || profile == null || profile.isBlank()) {
@@ -128,9 +134,9 @@ public class RotationLearner {
 
         for (String key : considered) {
             List<Map<String, Object>> kp = byKey.get(key);
-            // Открывающее: >=80% нажатий вне боя
+            // Открывающее: >=60% нажатий вне боя
             long outOfCombat = kp.stream().filter(r -> !Boolean.TRUE.equals(asBool(r.get("fight")))).count();
-            if (kp.size() > 0 && (double) outOfCombat / kp.size() >= 0.8) {
+            if (kp.size() > 0 && (double) outOfCombat / kp.size() >= 0.6) {
                 opening.put(key, true);
             } else {
                 opening.put(key, false);
@@ -275,15 +281,19 @@ public class RotationLearner {
 
     /**
      * Обучение ротации v2 по применённым заклинаниям (spell_cast, по nameHash).
-     * Тот же алгоритм, что и learn(), но идентификатор — nameHash заклинания.
+     * Если spell_cast для профиля пуст — hasData=false (можно fallback на key_press).
+     * Если есть данные, но их недостаточно — hasData=true, result=null (fallback запрещён).
+     * currentRotation — текущая ротация в игре: аварийные правила (maxHpPct) с малым числом
+     * данных (<5 применений) переносятся как есть.
      */
-    public Result learnSpells(String profile) {
+    public SpellLearn learnSpells(String profile, List<Map<String, Object>> currentRotation) {
+        final int REQUIRED_IN_COMBAT = 40;
         if (!db.isEnabled() || profile == null || profile.isBlank()) {
-            return null;
+            return new SpellLearn(null, false, 0, REQUIRED_IN_COMBAT);
         }
         List<Map<String, Object>> rows = db.querySpellCasts(profile);
         if (rows.isEmpty()) {
-            return null;
+            return new SpellLearn(null, false, 0, REQUIRED_IN_COMBAT);
         }
         List<Map<String, Object>> casts = new ArrayList<>();
         for (Map<String, Object> r : rows) {
@@ -291,20 +301,18 @@ public class RotationLearner {
             if (hash == null) continue;
             casts.add(r);
         }
-        if (casts.isEmpty()) return null;
+        if (casts.isEmpty()) {
+            return new SpellLearn(null, false, 0, REQUIRED_IN_COMBAT);
+        }
 
         int inCombatCasts = 0;
-        int fightStarts = 0;
         for (Map<String, Object> r : casts) {
-            Boolean fight = asBool(r.get("fight"));
-            Integer sfm = asInt(r.get("since_fight_ms"));
-            if (Boolean.TRUE.equals(fight)) inCombatCasts++;
-            if (sfm != null && sfm <= 500) fightStarts++;
+            if (Boolean.TRUE.equals(asBool(r.get("fight")))) inCombatCasts++;
         }
-        int approxFights = Math.max(1, fightStarts / 3);
-        if (approxFights < 3 && inCombatCasts < 60) {
-            log.info("Профиль '{}': недостаточно применений заклинаний (боёв ~{}, в бою {})", profile, approxFights, inCombatCasts);
-            return null;
+        if (inCombatCasts < REQUIRED_IN_COMBAT) {
+            log.info("Профиль '{}': недостаточно применений заклинаний в бою ({} < {}) — обучение пропущено, ротация сохранена",
+                    profile, inCombatCasts, REQUIRED_IN_COMBAT);
+            return new SpellLearn(null, true, inCombatCasts, REQUIRED_IN_COMBAT);
         }
 
         Map<Integer, List<Map<String, Object>>> byHash = new LinkedHashMap<>();
@@ -316,7 +324,10 @@ public class RotationLearner {
         for (Map.Entry<Integer, List<Map<String, Object>>> e : byHash.entrySet()) {
             if (e.getValue().size() >= 5) considered.add(e.getKey());
         }
-        if (considered.isEmpty()) return null;
+        if (considered.isEmpty()) {
+            log.info("Профиль '{}': нет заклинаний с >=5 применениями — обучение пропущено", profile);
+            return new SpellLearn(null, true, inCombatCasts, REQUIRED_IN_COMBAT);
+        }
 
         List<Double> allCombatHp = new ArrayList<>();
         for (Map<String, Object> r : casts) {
@@ -336,7 +347,7 @@ public class RotationLearner {
         for (Integer hash : considered) {
             List<Map<String, Object>> cp = byHash.get(hash);
             long outOfCombat = cp.stream().filter(r -> !Boolean.TRUE.equals(asBool(r.get("fight")))).count();
-            opening.put(hash, cp.size() > 0 && (double) outOfCombat / cp.size() >= 0.8);
+            opening.put(hash, cp.size() > 0 && (double) outOfCombat / cp.size() >= 0.6);
 
             List<Double> inCombatHp = new ArrayList<>();
             for (Map<String, Object> r : cp) {
@@ -408,6 +419,11 @@ public class RotationLearner {
         openingSpells.sort(copeland);
         restSpells.sort(copeland);
 
+        // Атакующая/выученная часть (без аварийных, добавленных алгоритмом — их отдельно обработаем через перенос)
+        // Сохраняем порядок: выученные аварийные, затем открывающие, затем остальные.
+        // Но аварийные из currentRotation с <5 данными надо перенести "как есть" и не дублировать.
+        Set<Integer> learnedHashes = new HashSet<>(considered);
+
         List<Integer> finalOrder = new ArrayList<>();
         finalOrder.addAll(emergencySpells);
         finalOrder.addAll(openingSpells);
@@ -415,7 +431,33 @@ public class RotationLearner {
 
         List<Map<String, Object>> rotation = new ArrayList<>();
         Map<String, Object> stats = new LinkedHashMap<>();
+        Set<Integer> added = new HashSet<>();
+
+        // Сначала переносим аварийные правила из текущей ротации, если данных по ним мало (<5)
+        if (currentRotation != null) {
+            for (Map<String, Object> cur : currentRotation) {
+                if (cur == null) continue;
+                Object spellObj = cur.get("spell");
+                Integer spell = asInt(spellObj);
+                if (spell == null) continue;
+                Object mhp = cur.get("maxHpPct");
+                boolean isEmergencyRule = mhp != null;
+                if (!isEmergencyRule) continue;
+                int count = byHash.containsKey(spell) ? byHash.get(spell).size() : 0;
+                if (count < 5) {
+                    Map<String, Object> preserved = new LinkedHashMap<>(cur);
+                    rotation.add(preserved);
+                    added.add(spell);
+                    Map<String, Object> hs = new LinkedHashMap<>();
+                    hs.put("count", count);
+                    hs.put("rule", "сохранено аварийное правило из текущей ротации (мало данных: " + count + ")");
+                    stats.put(String.valueOf(spell), hs);
+                }
+            }
+        }
+
         for (Integer hash : finalOrder) {
+            if (added.contains(hash)) continue;
             Map<String, Object> entry = new LinkedHashMap<>();
             entry.put("spell", hash);
             List<String> rules = new ArrayList<>();
@@ -445,9 +487,9 @@ public class RotationLearner {
         String statsJson = null;
         try { statsJson = JSON.writeValueAsString(stats); } catch (Exception ignored) {}
         lastStatsJson.put(profile, statsJson);
-        lastLearnedCount.put(profile, db.querySpellCasts(profile).size());
+        lastLearnedCount.put(profile, samples);
         log.info("Профиль '{}': выучена ротация v2 {} (samples={})", profile, rotation, samples);
-        return new Result(rotation, stats, samples);
+        return new SpellLearn(new Result(rotation, stats, samples), true, inCombatCasts, REQUIRED_IN_COMBAT);
     }
 
     @SuppressWarnings("unchecked")

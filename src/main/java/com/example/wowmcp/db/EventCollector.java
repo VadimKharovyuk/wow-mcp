@@ -24,6 +24,14 @@ public class EventCollector {
     private final RotationLearner learner;
     private final ObjectMapper json = new ObjectMapper();
 
+    /** Накопители для минутного лога «события: cast=N, kill=M, вставлено cast=K». */
+    private final java.util.concurrent.atomic.AtomicInteger statCasts = new java.util.concurrent.atomic.AtomicInteger();
+    private final java.util.concurrent.atomic.AtomicInteger statKills = new java.util.concurrent.atomic.AtomicInteger();
+    private final java.util.concurrent.atomic.AtomicInteger statCastsInserted = new java.util.concurrent.atomic.AtomicInteger();
+    private final java.util.concurrent.atomic.AtomicInteger statKeys = new java.util.concurrent.atomic.AtomicInteger();
+    private final java.util.concurrent.atomic.AtomicInteger statDrains = new java.util.concurrent.atomic.AtomicInteger();
+    private final java.util.concurrent.atomic.AtomicInteger statInsertErrors = new java.util.concurrent.atomic.AtomicInteger();
+
     public EventCollector(GameBridge bridge, DbService db, RotationLearner learner) {
         this.bridge = bridge;
         this.db = db;
@@ -40,6 +48,7 @@ public class EventCollector {
             return;
         }
         String payload = drained.get();
+        statDrains.incrementAndGet();
         if (payload == null || payload.isBlank() || payload.equals("[]")) {
             return;
         }
@@ -55,22 +64,20 @@ public class EventCollector {
         for (Map<String, Object> ev : events) {
             String type = String.valueOf(ev.get("type"));
             if ("key".equals(type)) {
+                // key_press больше не наполняем: нажатия дублируют spell_cast и путают обучение
                 keys++;
-                if (db.isEnabled()) {
-                    String profile = str(ev.get("profile"));
-                    lastProfile = profile;
-                    db.insertKeyPress(profile, str(ev.get("key")), asDouble(ev.get("hp")), asDouble(ev.get("mana")),
-                            asInt(ev.get("ready")), asBool(ev.get("fight")), asBool(ev.get("target")),
-                            asDouble(ev.get("targetHpPct")), asInt(ev.get("sinceFightMs")), str(ev.get("prevKey")),
-                            asInt(ev.get("prevKeyMs")), asLong(ev.get("at")));
-                }
+                statKeys.incrementAndGet();
             } else if ("cast".equals(type)) {
                 casts++;
+                statCasts.incrementAndGet();
                 if (db.isEnabled()) {
                     String profile = str(ev.get("profile"));
+                    if (profile == null || profile.isBlank()) {
+                        profile = "default";   // в БД profile NOT NULL — не теряем событие
+                    }
                     lastProfile = profile;
                     Integer nameHash = asInt(ev.get("spellId")); // JS кладёт spellId = nameHash
-                    Integer spellId = null;
+                    Integer spellId = asInt(ev.get("nameHash"));  // запасной вариант, если пришёл отдельно
                     Double hp = asDouble(ev.get("hp"));
                     Double mana = asDouble(ev.get("mana"));
                     Boolean fight = asBool(ev.get("fight"));
@@ -88,12 +95,18 @@ public class EventCollector {
                     Integer prevSpell = asInt(ev.get("prevSpell"));
                     Integer prevSpellMs = asInt(ev.get("prevSpellMs"));
                     long at = asLong(ev.get("at"));
-                    db.insertSpellCast(profile, nameHash == null ? 0 : nameHash, spellId, hp, mana, fight, target,
-                            targetHpPct, readySpells, sinceFightMs, prevSpell, prevSpellMs,
+                    boolean inserted = db.insertSpellCast(profile, nameHash == null ? 0 : nameHash, spellId, hp, mana,
+                            fight, target, targetHpPct, readySpells, sinceFightMs, prevSpell, prevSpellMs,
                             at == 0 ? System.currentTimeMillis() : at);
+                    if (inserted) {
+                        statCastsInserted.incrementAndGet();
+                    } else {
+                        statInsertErrors.incrementAndGet();
+                    }
                 }
             } else if ("kill".equals(type)) {
                 kills++;
+                statKills.incrementAndGet();
                 if (db.isEnabled()) {
                     Integer zone = asInt(ev.get("zone"));
                     Double x = asDouble(ev.get("x"));
@@ -122,25 +135,41 @@ public class EventCollector {
             log.debug("Собрано событий: kills={}, paths={}, keys={}, casts={}", kills, paths, keys, casts);
         }
 
-        // Автообучение: если профиль активен и накопилось >=40 новых нажатий/применений
+        // Автообучение: если профиль активен и накопилось >=40 новых применений
         if (db.isEnabled() && lastProfile != null) {
             try {
                 String activeProfile = String.valueOf(bridge.eval("() => bot.profile"));
                 if (lastProfile.equals(activeProfile)) {
-                    int total = db.querySpellCasts(lastProfile).size();
-                    if (total == 0) {
-                        total = db.queryKeyPresses(lastProfile).size();
-                    }
-                    if (total - learner.lastLearnedCount(lastProfile) >= 40) {
-                        RotationLearner.Result res = db.querySpellCasts(lastProfile).isEmpty()
-                                ? learner.learn(lastProfile)
-                                : learner.learnSpells(lastProfile);
-                        if (res != null) {
-                            String rotJson = json.writeValueAsString(res.rotation());
-                            bridge.eval("(r) => { bot.rotation = r; return 'ok'; }", res.rotation());
-                            String statsJson = res.stats() == null ? null : json.writeValueAsString(res.stats());
-                            db.upsertRotationProfile(lastProfile, rotJson, res.samples(), statsJson);
-                            log.info("Автообучение профиля '{}': {}", lastProfile, res.rotation());
+                    List<Map<String, Object>> spellRows = db.querySpellCasts(lastProfile);
+                    if (!spellRows.isEmpty()) {
+                        if (spellRows.size() - learner.lastLearnedCount(lastProfile) >= 40) {
+                            List<Map<String, Object>> currentRotation = List.of();
+                            try {
+                                Object rawRot = bridge.eval("() => JSON.stringify(bot.rotation)");
+                                currentRotation = json.readValue(String.valueOf(rawRot), new TypeReference<>() {});
+                            } catch (Exception ignored) {
+                            }
+                            RotationLearner.SpellLearn attempt = learner.learnSpells(lastProfile, currentRotation);
+                            if (!attempt.isInsufficient() && attempt.result() != null) {
+                                RotationLearner.Result res = attempt.result();
+                                String rotJson = json.writeValueAsString(res.rotation());
+                                bridge.eval("(r) => { bot.rotation = r; return 'ok'; }", res.rotation());
+                                String statsJson = res.stats() == null ? null : json.writeValueAsString(res.stats());
+                                db.upsertRotationProfile(lastProfile, rotJson, res.samples(), statsJson);
+                                log.info("Автообучение профиля '{}': {}", lastProfile, res.rotation());
+                            }
+                        }
+                    } else {
+                        int total = db.queryKeyPresses(lastProfile).size();
+                        if (total - learner.lastLearnedCount(lastProfile) >= 40) {
+                            RotationLearner.Result res = learner.learn(lastProfile);
+                            if (res != null) {
+                                String rotJson = json.writeValueAsString(res.rotation());
+                                bridge.eval("(r) => { bot.rotation = r; return 'ok'; }", res.rotation());
+                                String statsJson = res.stats() == null ? null : json.writeValueAsString(res.stats());
+                                db.upsertRotationProfile(lastProfile, rotJson, res.samples(), statsJson);
+                                log.info("Автообучение профиля '{}': {}", lastProfile, res.rotation());
+                            }
                         }
                     }
                 }
@@ -148,6 +177,18 @@ public class EventCollector {
                 log.warn("Автообучение не удалось: {}", e.getMessage());
             }
         }
+    }
+
+    /**
+     * Раз в минуту: даже когда событий нет, видно, что сборщик жив и БД доступна.
+     * Числа — за прошедшую минуту.
+     */
+    @Scheduled(fixedDelay = 60_000, initialDelay = 60_000)
+    public void logStats() {
+        log.info("события: cast={}, kill={}, вставлено cast={} (key={}, опросов страницы={}, ошибок вставки={}, БД {})",
+                statCasts.getAndSet(0), statKills.getAndSet(0), statCastsInserted.getAndSet(0),
+                statKeys.getAndSet(0), statDrains.getAndSet(0), statInsertErrors.getAndSet(0),
+                db.isEnabled() ? "включена" : "выключена");
     }
 
     private static Integer asInt(Object v) {

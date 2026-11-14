@@ -16,6 +16,7 @@ import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
@@ -125,13 +126,18 @@ public class WowTools {
 
     @Tool(name = "grind", description = """
             Автоматическая охота вокруг текущей точки: найти подходящего моба, подойти, \
-            убить, собрать добычу, отдохнуть, повторить. Работает в фоне. Возвращается по \
+            убить, собрать добычу (loot), отдохнуть, повторить. Работает в фоне. Возвращается по \
             лимиту убийств/времени или при проблеме (смерть, застрял, сумки полные, мобов нет). \
-            Во время охоты вызывай wait_job; статистика — в поле grind.
+            Во время охоты вызывай wait_job; статистика — в поле grind. \
+            loot — собирать добычу после боя (true/false, по умолчанию false).
 
             Если в базе есть места прошедших убийств в этой зоне — бот ходит по ним (быстрее), \
             иначе ищет вокруг. Параметр radius ограничивает зону охоты вокруг точки старта. \
-            respawnSec — через сколько секунд после визита место снова считается «тёплым».""")
+            respawnSec — через сколько секунд после визита место снова считается «тёплым».
+            mode — режим обхода мест: 'radius' (по умолчанию, охота вокруг старта) или
+            'patrol' (кольцевой обход мест зоны в пределах maxDistance, 2..40, по умолчанию 15).
+            minFreeSlots — при таком/меньшем числе свободных слотов идти к ближайшему торговцу зоны
+            (работает при любом loot); если торговец не известен — гринд остановится.""")
     public String grind(
             @ToolParam(required = false, description = "Радиус охоты вокруг старта, 0.5..10 (по умолчанию 2.5)")
             Double radius,
@@ -151,8 +157,16 @@ public class WowTools {
             String drinkKey,
             @ToolParam(required = false, description = "Использовать базу тёплых точек охоты, true/false (по умолчанию true)")
             Boolean useSpots,
+            @ToolParam(required = false, description = "Собирать добычу после боя, true/false (по умолчанию false)")
+            Boolean loot,
             @ToolParam(required = false, description = "Через сколько секунд место снова считается тёплым, 60..1800 (по умолчанию 240)")
-            Integer respawnSec) {
+            Integer respawnSec,
+            @ToolParam(required = false, description = "При таком/меньшем числе свободных слотов идти к торговцу, 0..10 (по умолчанию 2)")
+            Integer minFreeSlots,
+            @ToolParam(required = false, description = "Режим обхода мест: 'radius' (по умолчанию) или 'patrol'")
+            String mode,
+            @ToolParam(required = false, description = "Максимальное расстояние до мест маршрута в patrol, 2..40 (по умолчанию 15)")
+            Double maxDistance) {
         Map<String, Object> opts = new LinkedHashMap<>();
         if (radius != null) {
             if (!Double.isFinite(radius) || radius < 0.5 || radius > 10) {
@@ -208,17 +222,65 @@ public class WowTools {
             }
             opts.put("respawnSec", respawnSec);
         }
+        if (loot != null) {
+            opts.put("loot", loot);
+        }
+        if (minFreeSlots != null) {
+            if (minFreeSlots < 0 || minFreeSlots > 10) {
+                throw new IllegalArgumentException("minFreeSlots должен быть от 0 до 10");
+            }
+            opts.put("minFreeSlots", minFreeSlots);
+        }
+        String modeNorm = null;
+        if (mode != null) {
+            modeNorm = mode.trim().toLowerCase(Locale.ROOT);
+            if (!modeNorm.equals("radius") && !modeNorm.equals("patrol")) {
+                throw new IllegalArgumentException("mode должен быть 'radius' или 'patrol'");
+            }
+            opts.put("mode", modeNorm);
+        }
+        if (maxDistance != null) {
+            if (!Double.isFinite(maxDistance) || maxDistance < 2 || maxDistance > 40) {
+                throw new IllegalArgumentException("maxDistance должен быть от 2 до 40");
+            }
+            opts.put("maxDistance", maxDistance);
+        }
+        boolean patrol = "patrol".equals(modeNorm);
 
         // Тёплые точки охоты из БД (задача 4б): только если БД доступна и useSpots не false.
+        // В patrol берём все места зоны без фильтра по радиусу (фильтр по уровню моба — тот же),
+        // маршрут и ограничение maxDistance строит 40-grind.js.
         List<Map<String, Object>> spots = List.of();
-        if (useSpots == null || useSpots) {
+        Map<String, Object> vendorOpt = null;
+        if ((useSpots == null || useSpots) || db.isEnabled()) {
             if (db.isEnabled()) {
                 GameState state = GameState.parse(bridge.report());
-                int minLvl = state.pLvl() + (minLvlDiff == null ? DEFAULT_MIN_LVL_DIFF : minLvlDiff);
-                int maxLvl = state.pLvl() + (maxLvlDiff == null ? DEFAULT_MAX_LVL_DIFF : maxLvlDiff);
-                spots = db.querySpots(state.zone(), minLvl, maxLvl);
-                if (!spots.isEmpty()) {
-                    opts.put("spots", spots);
+                // vendor for this zone (nearest) — передаём всегда при наличии в БД
+                Map<String, Object> v = db.nearestVendor(state.zone(), state.x(), state.y());
+                if (v != null) {
+                    vendorOpt = vendorArg(v);
+                    opts.put("vendor", vendorOpt);
+                }
+                if (useSpots == null || useSpots || patrol) {
+                    int minLvl = state.pLvl() + (minLvlDiff == null ? DEFAULT_MIN_LVL_DIFF : minLvlDiff);
+                    int maxLvl = state.pLvl() + (maxLvlDiff == null ? DEFAULT_MAX_LVL_DIFF : maxLvlDiff);
+                    spots = db.querySpots(state.zone(), minLvl, maxLvl);
+                    if (!spots.isEmpty()) {
+                        // Playwright принимает в page.evaluate только Integer/Double/String/Boolean/Map/List:
+                        // Long (count) и BigDecimal (round(avg(...))) из БД валидны для JDBC, но не для Playwright.
+                        // Приводим каждое место к { x: double, y: double, kills: int, lvl: int|null }.
+                        List<Map<String, Object>> cleanSpots = new ArrayList<>();
+                        for (Map<String, Object> p : spots) {
+                            Map<String, Object> s = new LinkedHashMap<>();
+                            s.put("x", ((Number) p.get("x")).doubleValue());
+                            s.put("y", ((Number) p.get("y")).doubleValue());
+                            s.put("kills", ((Number) p.get("kills")).intValue());
+                            Object lvl = p.get("lvl");
+                            s.put("lvl", lvl == null ? null : ((Number) lvl).intValue());
+                            cleanSpots.add(s);
+                        }
+                        opts.put("spots", cleanSpots);
+                    }
                 }
             }
         }
@@ -226,7 +288,9 @@ public class WowTools {
         String startResult = bridge.start("grind", args);
         Map<String, Object> response = new LinkedHashMap<>();
         response.put("result", startResult);
+        response.put("mode", patrol ? "patrol" : "radius");
         response.put("spots", spots.size());
+        response.put("vendor", vendorOpt != null);
         return JSON.writeValueAsString(response);
     }
 
@@ -338,8 +402,8 @@ public class WowTools {
     }
 
     @Tool(name = "get_rotation", description = """
-            Показывает текущий приоритет умений (массив слотов панели 1–9 с необязательными \
-            maxHpPct, outOfCombatOnly и waitAfter) и статистику обучения по клавишам.""")
+            Показывает текущий приоритет умений. Для v2 (spell) дополнительно показывает spellId (если известен), \
+            текущую клавишу из spells() (например "O", "2", "Shift+E") и правило; а также статистику обучения.""")
     public String getRotation() {
         bridge.ensureReady();
         Object rotation = bridge.eval("() => JSON.stringify(bot.rotation)");
@@ -370,19 +434,21 @@ public class WowTools {
                     byHash.put(n.intValue(), (Map<String, Object>) m);
                 }
             }
-            for (Object o : rotationList) {
+            for (int idx = 0; idx < rotationList.size(); idx++) {
+                Object o = rotationList.get(idx);
                 if (!(o instanceof Map<?, ?> rule)) continue;
                 Object spellValue = rule.get("spell");
                 if (spellValue instanceof Number n) {
                     Map<String, Object> info = byHash.get(n.intValue());
+                    Map<String, Object> copy = new LinkedHashMap<>((Map<String, Object>) rule);
                     if (info != null) {
-                        Map<String, Object> copy = new LinkedHashMap<>((Map<String, Object>) rule);
+                        if (info.get("spellId") != null) copy.put("spellId", info.get("spellId"));
                         copy.put("slot", info.get("slot"));
                         copy.put("keyCode", info.get("keyCode"));
                         copy.put("mods", info.get("mods"));
-                        // вернём правило с обогащёнными полями
-                        rotationList.set(rotationList.indexOf(o), copy);
+                        copy.put("key", formatSpellKey(info));
                     }
+                    rotationList.set(idx, copy);
                 }
             }
         }
@@ -407,9 +473,43 @@ public class WowTools {
         return JSON.writeValueAsString(result);
     }
 
+    private static String formatSpellKey(Map<String, Object> info) {
+        if (info == null) return null;
+        Integer keyCode = asInt(info.get("keyCode"));
+        if (keyCode == null || keyCode == 0) return null;
+        Integer mods = asInt(info.get("mods"));
+        int m = mods == null ? 0 : mods;
+        String base = keyChar(keyCode);
+        if (base == null || base.isEmpty()) base = "keyCode:" + keyCode;
+        StringBuilder sb = new StringBuilder();
+        if ((m & 1) != 0) sb.append("Shift+");
+        if ((m & 2) != 0) sb.append("Ctrl+");
+        if ((m & 4) != 0) sb.append("Alt+");
+        sb.append(base);
+        return sb.toString();
+    }
+
+    private static String keyChar(int c) {
+        if (c >= 65 && c <= 90) return String.valueOf((char) c);
+        if (c >= 48 && c <= 57) return String.valueOf((char) c);
+        if (c == 189) return "-";
+        if (c == 187) return "=";
+        if (c >= 112 && c <= 123) return "F" + (c - 111);
+        if (c == 32) return "Space";
+        return null;
+    }
+
+    private static Integer asInt(Object v) {
+        if (v == null) return null;
+        if (v instanceof Number n) return n.intValue();
+        try { return Integer.parseInt(String.valueOf(v)); } catch (NumberFormatException e) { return null; }
+    }
+
     @Tool(name = "set_profile", description = """
             Задать активный профиль персонажа (имя). Бот начинает записывать нажатия игрока \
             для этого профиля и загружает сохранённую ротацию (если есть). \
+            Профиль сохраняется в БД (active_profile) и переживает перезапуск сервера \
+            и перезагрузку страницы. \
             Без БД работает в памяти: нажатия не сохраняются, обучение недоступно.""")
     public String setProfile(
             @ToolParam(description = "Имя профиля (например paladin, mage)") String name) {
@@ -417,9 +517,10 @@ public class WowTools {
             throw new IllegalArgumentException("name не должен быть пустым");
         }
         bridge.ensureReady();
-        bridge.eval("(p) => { bot.profile = p; return bot.profile; }", name);
+        bridge.eval("(p) => bot.setProfile ? bot.setProfile(p) : (bot.profile = p, window.__wowProfile = p)", name);
         Map<String, Object> loaded = null;
         if (db.isEnabled()) {
+            db.setActiveProfile(name);   // чтобы autoLoadProfile нашёл профиль после перезапуска
             loaded = db.loadRotationProfile(name);
             if (loaded != null && loaded.get("rotation_json") != null) {
                 Object rotation = JSON.readValue(String.valueOf(loaded.get("rotation_json")), Object.class);
@@ -439,7 +540,8 @@ public class WowTools {
     }
 
     @Tool(name = "learn_rotation", description = """
-            Принудительно переучить ротацию активного профиля по накопленным нажатиям и применить её.""")
+            Принудительно переучить ротацию активного профиля. Если есть данные spell_cast — учится только по ним (v2, nameHash); \
+            fallback на key_press только когда spell_cast пуст. При недостатке данных spell_cast текущая ротация не меняется.""")
     public String learnRotation() {
         bridge.ensureReady();
         String profile = String.valueOf(bridge.eval("() => bot.profile"));
@@ -450,6 +552,45 @@ public class WowTools {
             return JSON.writeValueAsString(Map.of("result", "база не настроена — обучение недоступно",
                     "dbEnabled", false));
         }
+
+        // Текущая ротация нужна для сохранения аварийных правил (maxHpPct) при малом числе данных
+        List<Map<String, Object>> currentRotation = List.of();
+        try {
+            Object raw = bridge.eval("() => JSON.stringify(bot.rotation)");
+            currentRotation = JSON.readValue(String.valueOf(raw), new tools.jackson.core.type.TypeReference<>() {});
+        } catch (RuntimeException ignored) {
+        }
+
+        List<Map<String, Object>> spellRows = db.querySpellCasts(profile);
+        if (!spellRows.isEmpty()) {
+            RotationLearner.SpellLearn attempt = learner.learnSpells(profile, currentRotation);
+            if (attempt.isInsufficient()) {
+                return JSON.writeValueAsString(Map.of(
+                        "result", "мало данных: " + attempt.inCombatCasts() + " применений в бою, нужно " + attempt.requiredInCombat(),
+                        "profile", profile,
+                        "inCombatCasts", attempt.inCombatCasts(),
+                        "requiredInCombat", attempt.requiredInCombat(),
+                        "rotationKept", true));
+            }
+            RotationLearner.Result res = attempt.result();
+            if (res == null) {
+                return JSON.writeValueAsString(Map.of(
+                        "result", "мало данных: " + attempt.inCombatCasts() + " применений в бою, нужно " + attempt.requiredInCombat(),
+                        "profile", profile,
+                        "inCombatCasts", attempt.inCombatCasts(),
+                        "requiredInCombat", attempt.requiredInCombat(),
+                        "rotationKept", true));
+            }
+            String rotJson = JSON.writeValueAsString(res.rotation());
+            bridge.eval("(r) => { bot.rotation = r; return 'ok'; }", res.rotation());
+            String statsJson = res.stats() == null ? null : JSON.writeValueAsString(res.stats());
+            db.upsertRotationProfile(profile, rotJson, res.samples(), statsJson);
+            learner.setLastLearnedCount(profile, spellRows.size());
+            return JSON.writeValueAsString(Map.of("result", "ротация выучена и применена", "profile", profile,
+                    "rotation", res.rotation(), "samples", res.samples(), "source", "spell_cast"));
+        }
+
+        // Fallback на key_press только если spell_cast пуст
         RotationLearner.Result res = learner.learn(profile);
         if (res == null) {
             return JSON.writeValueAsString(Map.of("result", "недостаточно данных для обучения", "profile", profile));
@@ -460,7 +601,7 @@ public class WowTools {
         db.upsertRotationProfile(profile, rotJson, res.samples(), statsJson);
         learner.setLastLearnedCount(profile, db.queryKeyPresses(profile).size());
         return JSON.writeValueAsString(Map.of("result", "ротация выучена и применена", "profile", profile,
-                "rotation", res.rotation(), "samples", res.samples()));
+                "rotation", res.rotation(), "samples", res.samples(), "source", "key_press"));
     }
 
     @Tool(name = "reset_learning", description = """
@@ -475,7 +616,7 @@ public class WowTools {
             bridge.ensureReady();
             String active = String.valueOf(bridge.eval("() => bot.profile"));
             if (name.equals(active)) {
-                bridge.eval("() => { bot.profile = null; return 'ok'; }");
+                bridge.eval("() => (bot.setProfile ? bot.setProfile(null) : (bot.profile = null, window.__wowProfile = null))");
             }
             return JSON.writeValueAsString(Map.of("result", "профиль сброшен (база не настроена)", "profile", name,
                     "dbEnabled", false));
@@ -484,9 +625,109 @@ public class WowTools {
         bridge.ensureReady();
         String active = String.valueOf(bridge.eval("() => bot.profile"));
         if (name.equals(active)) {
-            bridge.eval("() => { bot.profile = null; return 'ok'; }");
+            bridge.eval("() => (bot.setProfile ? bot.setProfile(null) : (bot.profile = null, window.__wowProfile = null))");
         }
         return JSON.writeValueAsString(Map.of("result", "данные профиля удалены", "profile", name));
+    }
+
+    @Tool(name = "bags", description = """
+            Показывает состояние сумок: свободно/всего слотов (обычные сумки), сколько предметов к продаже, \
+            деньги, открыто ли окно торговца и т.д.""")
+    public String bags() {
+        bridge.ensureReady();
+        Object raw = bridge.eval("() => JSON.stringify(bot.bags ? bot.bags() : {})");
+        try {
+            return JSON.writeValueAsString(Map.of("bags", JSON.readValue(String.valueOf(raw), Object.class)));
+        } catch (RuntimeException e) {
+            return JSON.writeValueAsString(Map.of("bags", raw));
+        }
+    }
+
+    @Tool(name = "remember_vendor", description = """
+            Запомнить торговца в ТЕКУЩЕЙ точке игрока (zone/x/y из get_state). Игрок должен стоять рядом с NPC.""")
+    public String rememberVendor(
+            @ToolParam(description = "Имя торговца (как в игре, для /target)") String name) {
+        if (name == null || name.isBlank()) {
+            throw new IllegalArgumentException("name не должен быть пустым");
+        }
+        if (!db.isEnabled()) {
+            return JSON.writeValueAsString(Map.of("result", "база не настроена — торговец не сохранён"));
+        }
+        GameState state = GameState.parse(bridge.report());
+        // facing нужен, чтобы бот при продаже смотрел туда же, куда игрок при запоминании
+        db.rememberVendor(state.zone(), state.x(), state.y(), name.trim(), state.facing());
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("result", "торговец сохранён");
+        result.put("zone", state.zone());
+        result.put("x", state.x());
+        result.put("y", state.y());
+        result.put("facing", state.facing());
+        result.put("name", name.trim());
+        return JSON.writeValueAsString(result);
+    }
+
+    @Tool(name = "vendors", description = "Список торговцев текущей зоны.")
+    public String vendors() {
+        GameState state = GameState.parse(bridge.report());
+        if (!db.isEnabled()) {
+            return JSON.writeValueAsString(Map.of("result", "база не настроена", "zone", state.zone(), "vendors", List.of()));
+        }
+        List<Map<String, Object>> list = db.listVendors(state.zone());
+        // ensure numeric types are safe in output (already int/double from DbService)
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("zone", state.zone());
+        result.put("vendors", list);
+        return JSON.writeValueAsString(result);
+    }
+
+    @Tool(name = "sell_now", description = """
+            Продать хлам и отремонтироваться у ближайшего известного торговца текущей зоны. \
+            Запускается в фоне — результат смотри через wait_job.""")
+    public String sellNow() {
+        if (!db.isEnabled()) {
+            return JSON.writeValueAsString(Map.of("result", "база не настроена — торговец неизвестен"));
+        }
+        GameState state = GameState.parse(bridge.report());
+        Map<String, Object> v = db.nearestVendor(state.zone(), state.x(), state.y());
+        if (v == null) {
+            return JSON.writeValueAsString(Map.of("result", "торговец в текущей зоне не задан", "zone", state.zone()));
+        }
+        return jsonResult(bridge.start("sellAt", List.of(vendorArg(v))));
+    }
+
+    /** Запись торговца из БД → аргумент bot.sellAt (facing может отсутствовать в старых записях). */
+    private static Map<String, Object> vendorArg(Map<String, Object> v) {
+        Map<String, Object> vendor = new LinkedHashMap<>();
+        vendor.put("x", ((Number) v.get("x")).doubleValue());
+        vendor.put("y", ((Number) v.get("y")).doubleValue());
+        vendor.put("name", String.valueOf(v.get("name")));
+        Object facing = v.get("facing");
+        if (facing instanceof Number n) {
+            vendor.put("facing", n.doubleValue());
+        }
+        return vendor;
+    }
+
+    @Tool(name = "keep_item", description = """
+            Добавить предмет в список KEEP (не продавать). Сохраняет в БД и сразу применяет в игре.""")
+    public String keepItem(
+            @ToolParam(description = "ID предмета (itemId)") Integer itemId) {
+        if (itemId == null || itemId <= 0) {
+            throw new IllegalArgumentException("itemId должен быть положительным целым");
+        }
+        if (db.isEnabled()) {
+            db.addKeepItem(itemId);
+        }
+        bridge.ensureReady();
+        try {
+            bridge.eval("(id) => chat('/run KEEP['+id+']=true')", itemId);
+        } catch (RuntimeException e) {
+            return JSON.writeValueAsString(Map.of(
+                    "result", "сохранено в БД, но не удалось применить в игре: " + e.getMessage(),
+                    "itemId", itemId,
+                    "dbEnabled", db.isEnabled()));
+        }
+        return JSON.writeValueAsString(Map.of("result", "предмет добавлен в KEEP", "itemId", itemId, "dbEnabled", db.isEnabled()));
     }
 
     @Tool(name = "reload_bot", description = """

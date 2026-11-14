@@ -61,8 +61,10 @@ KEYS['0'] = KEYS[0];
 
 // ===== базовый объект бота =====
 window.bot = {
-  addr: null, stride: 0, saddr: null, sstride: 0, held: {}, running: false, grinding: false, lastSpellAt: {}, warnings: [],
+  addr: null, stride: 0, saddr: null, sstride: 0, iaddr: null, istride: 0, held: {}, running: false, grinding: false, lastSpellAt: {}, warnings: [],
   lastKey: {}, grindStats: null,
+  // активный профиль; переживает reload_bot через window.__wowProfile (страница при этом не перезагружается)
+  profile: window.__wowProfile || null,
   // ---- РОТАЦИЯ: приоритетный список слотов панели 1–9 ----
   // Готовность умений берём из маски B[13] (state().ready), а не из таймеров.
   // maxHpPct — применять умение, только если HP ниже этой доли.
@@ -96,7 +98,7 @@ window.bot = {
     return res[0];
   },
 
-  // найти Lua-таблицы B и S в памяти WASM
+  // найти Lua-таблицы B, S, I в памяти WASM
   async find() {
     const b = await this.findTable(777001.5, 777002.5, 8);
     if (b) { this.addr = b[0]; this.stride = b[1]; console.log('НАШЁЛ B ✅', this.state()); }
@@ -104,6 +106,9 @@ window.bot = {
     const s = await this.findTable(777003.5, 777004.5, 4);
     if (s) { this.saddr = s[0]; this.sstride = s[1]; console.log('НАШЁЛ S ✅'); }
     else console.warn('Не нашёл S.');
+    const i = await this.findTable(777005.5, 777006.5, 4);
+    if (i) { this.iaddr = i[0]; this.istride = i[1]; console.log('НАШЁЛ I ✅', this.bags()); }
+    else console.warn('Не нашёл I.');
   },
 
   state() {
@@ -139,6 +144,24 @@ window.bot = {
     if (this.saddr === null) return { count: 0, lastSpell: 0 };
     const H = this.mem(), g = n => H[this.saddr + n * this.sstride];
     return { count: g(2) | 0, lastSpell: g(3) | 0 };
+  },
+
+  // I-таблица: сумки/торговец/продажа
+  bags() {
+    if (this.iaddr == null) {
+      return { free: 0, total: 0, merchantOpen: 0, toSell: 0, sold: 0, repairCost: 0, money: 0, moIsTarget: 0 };
+    }
+    const H = this.mem(), g = n => H[this.iaddr + n * this.istride];
+    return {
+      free: g(2) | 0,
+      total: g(3) | 0,
+      merchantOpen: g(5) | 0,
+      toSell: g(6) | 0,
+      sold: g(7) | 0,
+      repairCost: g(8) | 0,
+      money: g(9) | 0,
+      moIsTarget: g(10) | 0
+    };
   },
 
   key(k, down) {
@@ -201,7 +224,21 @@ window.bot = {
   },
   dispose() { if (this.trackInt) { clearInterval(this.trackInt); this.trackInt = null; } if (this.keyLogger) { document.removeEventListener('keydown', this.keyLogger, true); this.keyLogger = null; } },
   release() { this.running = false; for (const k in this.held) this.key(k, false); },
-  stop()    { this.grinding = false; this.release(); },
+  stop() {
+    this.grinding = false;
+    // Задача не должна остаться в статусе 'running': по нему 60-track.js решает,
+    // что действие сделал бот, и тогда ручные нажатия игрока не пишутся в БД.
+    if (this.job && this.job.status === 'running') {
+      this.job = { name: this.job.name, status: 'stopped', started: this.job.started, stoppedAt: Date.now() };
+    }
+    this.release();
+  },
+  // задать активный профиль; null — сбросить. window.__wowProfile переживает reload_bot.
+  setProfile(p) {
+    this.profile = p || null;
+    window.__wowProfile = this.profile;
+    return this.profile;
+  },
 
   // ---- фоновый режим для Claude: start → report ----
   job: { status: 'idle' },

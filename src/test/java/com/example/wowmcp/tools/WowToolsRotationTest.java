@@ -33,7 +33,7 @@ class WowToolsRotationTest {
         assertThat(rotation.get(1)).containsEntry("key", "4");
         Map<?, ?> waitAfter = (Map<?, ?>) rotation.get(1).get("waitAfter");
         assertThat(waitAfter.get("key")).isEqualTo("2");
-        assertThat(waitAfter.get("ms")).isEqualTo(1000L);
+        assertThat(waitAfter.get("ms")).isEqualTo(1000);   // parseRotation кладёт Integer, не Long
         assertThat(rotation.get(2)).containsEntry("key", "3").containsEntry("outOfCombatOnly", true);
     }
 
