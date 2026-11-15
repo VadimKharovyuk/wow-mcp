@@ -21,6 +21,7 @@ Object.assign(bot, {
   async loot({ timeout = 8000 } = {}) {
     await this.closeInOnCorpse();
     const b0 = this.bags();
+    const lo0 = (this.deathInfo() || {}).lootOpened;      // счётчик LOOT_OPENED до клика
     const pts = [];
     for (let fy = 0.45; fy <= 0.90; fy += 0.05)
       for (let fx = 0.25; fx <= 0.75; fx += 0.04) pts.push([fx, fy]);
@@ -45,7 +46,9 @@ Object.assign(bot, {
             if (Date.now() - t0 > 1500 && s.lootN === 0) {
               // автолут забирает добычу мгновенно и окно можно не успеть увидеть — смотрим и на сумки/деньги
               const b1 = this.bags();
-              const gained = sawWindow || b1.free < b0.free || (b1.money || 0) > (b0.money || 0);
+              const lo1 = (this.deathInfo() || {}).lootOpened;
+              const opened = lo0 != null && lo1 != null && lo1 > lo0;   // окно добычи открывалось (даже мгновенный автолут)
+              const gained = opened || sawWindow || b1.free < b0.free || (b1.money || 0) > (b0.money || 0);
               return { result: gained ? 'добыча собрана' : 'пустой труп или не открылся', point: [fx, fy], ...s };
             }
           }

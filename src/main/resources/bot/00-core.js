@@ -124,7 +124,7 @@ window.bot = {
     const H = this.mem(), g = n => H[this.daddr + n * this.dstride];
     return { dead: g(3) === 1, ghost: g(4) === 1,
              corpseX: +(g(5) * 100).toFixed(2), corpseY: +(g(6) * 100).toFixed(2),
-             recoveryDelay: g(7), zone: g(8), ammo: g(9) };
+             recoveryDelay: g(7), zone: g(8), ammo: g(9), lootOpened: g(10) };
   },
 
   // Q-таблица: питомец. null — таблица не найдена (старый Lua).
