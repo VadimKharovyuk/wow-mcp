@@ -59,7 +59,7 @@ public class GrindTools {
             Double radius,
             @ToolParam(required = false, description = "Лимит убийств, 0 = без лимита (по умолчанию 10)")
             Integer maxKills,
-            @ToolParam(required = false, description = "Лимит времени в минутах, 1..180 (по умолчанию 30)")
+            @ToolParam(required = false, description = "Лимит времени в минутах, 0 = без лимита, до 1440 (по умолчанию 30)")
             Integer maxMinutes,
             @ToolParam(required = false, description = "Минимальная разница уровней цели, -10..5 (по умолчанию -5)")
             Integer minLvlDiff,

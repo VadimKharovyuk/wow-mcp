@@ -31,7 +31,7 @@ final class GrindOptions {
             opts.put("maxKills", maxKills);
         }
         if (maxMinutes != null) {
-            requireRange(maxMinutes >= 1 && maxMinutes <= 180, "maxMinutes должен быть от 1 до 180");
+            requireRange(maxMinutes >= 0 && maxMinutes <= 1440, "maxMinutes должен быть от 0 (без лимита времени) до 1440");
             opts.put("maxMinutes", maxMinutes);
         }
         if (minLvlDiff != null) {

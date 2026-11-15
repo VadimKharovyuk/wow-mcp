@@ -344,7 +344,7 @@ Object.assign(bot, {
       }
       this.lastAlive = { hpPct: +(s.hp / s.hpMax).toFixed(2), manaPct: s.manaPct, pet: s.pet };
       if (cfg.maxKills && st.kills >= cfg.maxKills) return out('лимит убийств достигнут');
-      if (Date.now() - t0 > cfg.maxMinutes * 60000) return out('время вышло');
+      if (cfg.maxMinutes && Date.now() - t0 > cfg.maxMinutes * 60000) return out('время вышло');   // 0 — без лимита времени
 
       if (s.fight) {                                        // на нас напали — сначала отбиться
         const p = await this.fightAndLoot(st); if (p) return out(p); continue;
