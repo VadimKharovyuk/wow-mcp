@@ -3,11 +3,68 @@
 // Сколько не двигаться после нажатия 4: чтобы не сбить чтение лечащего заклинания.
 const HEAL_CAST_LOCK_MS = 3000;
 
+// Отдых по профилям. Профиля нет в списке — работают параметры rest() (паладин: лечение на 7, вода на 0).
+// foodKey — еда (жмётся один раз), drinkKey — вода, healKey/healSpell — лечащее заклинание.
+const PROFILE_REST = {
+  hunter: { foodKey: '9', drinkKey: '0' },
+};
+
 Object.assign(bot, {
+  // Боевые настройки профиля. ranged — стрелок: не подходить вплотную, отходить, когда моба держит питомец.
+  // shootSpell — по нему проверяем «достаю выстрелом»; meleeSpell — «моб вплотную» (мёртвая зона).
+  combatCfg() {
+    const C = {
+      hunter: { ranged: true, shootSpell: 1278643508 /* Чародейский выстрел */,
+                meleeSpell: 1704697426 /* Удар ящера */, beastsOnly: true,
+                // Закреплённая ротация: используется вместо выученной (автообучение пока учит
+                // автострельбу и лечение питомца без условия). Убрать, когда обучение исправят.
+                rotation: [
+                  { spell: 1635767960, maxPetHpPct: 0.5 },     // Лечение питомца, если у питомца < 50%
+                  { spell: 1554409780, repeatMs: 15000 },       // Укус змеи — в начале боя, потом раз в 15 с
+                  { spell: 913131775 },                         // Кровавое неистовство
+                  { spell: 1704697426 },                        // Удар ящера (только вплотную)
+                  { spell: 1278643508 },                        // Чародейский выстрел
+                ] },
+    };
+    return C[this.profile] || null;
+  },
+  // ротация для боя: закреплённая в профиле, иначе выученная/заданная (this.rotation)
+  activeRotation() { const c = this.combatCfg(); return (c && c.rotation) || this.rotation || []; },
+  spellInRange(h) { const r = (this.spells() || []).find(x => x.nameHash === h); return r ? r.inRange : -1; },
+
+  // повернуться к направлению a (радианы, как facing) — держим A/D, пока не довернём
+  async turnTo(a, maxMs = 2500) {
+    const norm = v => Math.atan2(Math.sin(v), Math.cos(v));
+    const t0 = Date.now();
+    while (Date.now() - t0 < maxMs) {
+      const e = norm(a - this.state().facing);
+      if (Math.abs(e) < 0.12) break;
+      this.key('A', e > 0); this.key('D', e < 0);
+      await sleep(30);
+    }
+    this.key('A', false); this.key('D', false);
+  },
+
+  // отход стрелка: спиной к мобу, пробежать, повернуться обратно
+  async retreat(ms = 2200) {
+    const f0 = this.state().facing;
+    this.key('W', false);
+    await this.turnTo(f0 + Math.PI);
+    this.key('W', true); await sleep(ms); this.key('W', false);
+    await this.turnTo(f0);
+  },
+
+  // питомцу нужно лечение: есть, жив, HP ниже порога и лечение на нём ещё не висит (HoT 15 с)
+  petNeedsHeal(below) {
+    const p = this.pet();
+    return !!p && p.exists && !p.dead && !p.mend && p.hpPct < below;
+  },
+
   async fight({ fleeAt = 0.2, timeout = 90000 } = {}) {
     this.running = true;
-    const t0 = Date.now();
-    let lastPress = 0, handledErr = 0, turns = 0;
+    const t0 = Date.now(), fightStart = t0;
+    let lastPress = 0, handledErr = 0, turns = 0, retreats = 0, lastRetreat = 0, deadSince = 0;
+    const cc = this.combatCfg();
     while (this.running) {
       const s = this.state(), hpPct = s.hp / s.hpMax;
       if (!s.fight && (!s.target || s.targetHp === 0)) return { result: 'бой окончен', ...s };
@@ -26,18 +83,62 @@ Object.assign(bot, {
       if (s.errTime > lastPress && s.errTime > handledErr) {
         handledErr = s.errTime;
         if (s.err === 1 && turns < 4) { await this.hold('A', 450); turns++; continue; }  // ~90° поворот
-        if (s.err === 2 && now - (this.lastKey['4'] || 0) > HEAL_CAST_LOCK_MS) {
+        // стрелку «далеко» в мёртвой зоне не значит «подойди» — он и так вплотную
+        const inDeadZone = cc && cc.ranged && this.spellInRange(cc.meleeSpell) === 1;
+        if (s.err === 2 && !inDeadZone && now - (this.lastKey['4'] || 0) > HEAL_CAST_LOCK_MS) {
           await this.hold('W', 500); continue;                                           // подойти ближе
         }
       }
 
+      // Стрелок вплотную, а моба держит питомец — отойти и стрелять (не чаще раза в 6 с, максимум 2 за бой).
+      // Если моб бьёт самого охотника — не бегать (догонит), бить в ближнем бою.
+      // «Вплотную» = Удар ящера достаёт, а выстрел НЕТ (мёртвая зона) и моб ближе ~10 м; держится ≥ 1 с.
+      const deadZone = cc && cc.ranged && this.spellInRange(cc.meleeSpell) === 1
+          && this.spellInRange(cc.shootSpell) === 0 && (s.tDist & 2);
+      if (!deadZone) deadSince = 0; else if (!deadSince) deadSince = now;
+      if (deadZone && now - deadSince >= 1000 && s.fight && retreats < 2 && now - lastRetreat > 10000 && hpPct > 0.3) {
+        const p = this.pet();
+        if (p && p.exists && !p.dead && p.ttPet) {
+          deadSince = 0;
+          await this.retreat(); retreats++; lastRetreat = Date.now();
+          this.warnings.push('отход: моба держит питомец');
+          if (this.warnings.length > 20) this.warnings.shift();
+          continue;
+        }
+      }
+
+      // Проверка, что нажатие сработало: после удачного применения умение уходит на ГКД/КД (ready=0).
+      // Если за 1.2 с оно так и осталось готовым — нажатие не прошло (клавиша не работает, нельзя применить):
+      // пропускаем это умение 5 с, чтобы оно не блокировало остальные правила.
+      this.pressLog = this.pressLog || {};
+      this.failedUntil = this.failedUntil || {};
+      this.lastOkAt = this.lastOkAt || {};
+      for (const h in this.pressLog) {
+        const rec = spellRec(+h), at = this.pressLog[h];
+        if (!rec || rec.ready === 0) { this.lastOkAt[h] = now; delete this.pressLog[h]; continue; }
+        if (now - at > 1200) {
+          this.failedUntil[h] = now + 5000; delete this.pressLog[h];
+          this.warnings.push('нажатие не сработало: ' + h + ' (клавиша ' + rec.keyCode + ')');
+          if (this.warnings.length > 20) this.warnings.shift();
+        }
+      }
+
       let pick = null;
-      for (const r of this.rotation) {
+      for (const r of this.activeRotation()) {
         // --- v2: заклинание по хешу названия ---
         if (r.spell) {
           const rec = spellRec(r.spell);
-          if (!rec || rec.ready !== 1 || rec.inRange === 0) continue;
+          if ((this.failedUntil[r.spell] || 0) > now) continue;
+          // уже нажали и ждём, сработало ли — не жать повторно каждые 250 мс
+          if (this.pressLog[r.spell]) continue;
+          // лечение питомца — HoT на 15 с: после удачного применения не повторять 14 с
+          if (r.maxPetHpPct && now - (this.lastOkAt[r.spell] ?? -1e15) < 14000) continue;
+          // repeatMs — не повторять чаще (эффект ещё висит); в новом бою первое применение сразу
+          if (r.repeatMs && (this.lastOkAt[r.spell] ?? -1e15) > fightStart && now - this.lastOkAt[r.spell] < r.repeatMs) continue;
+          // лечение питомца целится в питомца — дальность до врага для него не важна
+          if (!rec || rec.ready !== 1 || (rec.inRange === 0 && !r.maxPetHpPct)) continue;
           if (r.maxHpPct && hpPct >= r.maxHpPct) continue;
+          if (r.maxPetHpPct && !this.petNeedsHeal(r.maxPetHpPct)) continue;
           if (r.outOfCombatOnly && s.fight) continue;
           if (r.waitAfter) {
             const ref = r.waitAfter.spell ? (this.lastSpellAt[r.waitAfter.spell] || 0) : (this.lastKey[r.waitAfter.key] || 0);
@@ -48,6 +149,7 @@ Object.assign(bot, {
         // --- v1: слот по клавише ---
         if (!isReadyKey(r.key)) continue;
         if (r.maxHpPct && hpPct >= r.maxHpPct) continue;
+        if (r.maxPetHpPct && !this.petNeedsHeal(r.maxPetHpPct)) continue;
         if (r.outOfCombatOnly && s.fight) continue;
         if (r.waitAfter) {
           const ref = r.waitAfter.spell ? (this.lastSpellAt[r.waitAfter.spell] || 0) : (this.lastKey[r.waitAfter.key] || 0);
@@ -57,7 +159,7 @@ Object.assign(bot, {
       }
       if (pick && pick !== 'wait') {
         if (pick.spell) {
-          await this.pressSpell(pick.spell);
+          if (await this.pressSpell(pick.spell) && !this.pressLog[pick.spell]) this.pressLog[pick.spell] = Date.now();
         } else {
           await this.tap(pick.key);
           this.lastKey[pick.key] = Date.now();
@@ -70,11 +172,20 @@ Object.assign(bot, {
   },
 
   async rest({ hpUntil = 0.8, manaUntil = 0.9, manaBelow = 0.3,
-                healKey = '7', healSpell = null, drinkKey = '0', timeout = 60000 } = {}) {
+                healKey = '7', healSpell = null, drinkKey = '0', foodKey = null, timeout = 60000 } = {}) {
+    // настройки отдыха профиля важнее параметров, пришедших из гринда (там умолчания паладина)
+    const pr = PROFILE_REST[this.profile];
+    if (pr) ({ healKey, healSpell, drinkKey, foodKey } = { healKey: null, healSpell: null, foodKey: null, drinkKey, ...pr });
     const t0 = Date.now();
     const isReady = (s, k) => (s.ready >> (+k - 1)) & 1;
     let s = this.state();
     const bail = r => ({ result: r, ...this.state() });
+
+    // 0) еда — нажать ОДИН раз (повторное нажатие начинает трапезу заново и тратит ещё порцию)
+    let ate = false;
+    if (foodKey && s.hp / s.hpMax < hpUntil && !s.fight) {
+      await this.tap(foodKey); ate = true; await sleep(500);
+    }
 
     // 1) питьё, если мало маны
     if (drinkKey && s.manaPct < manaBelow) {
@@ -100,11 +211,17 @@ Object.assign(bot, {
       }
       await sleep(3000);                       // время чтения заклинания
     }
-    // 3) добрать естественным отдыхом
+    // 3) добрать естественным отдыхом; питомца подлечить его правилом из ротации
+    const petRule = this.activeRotation().find(r => r.maxPetHpPct && r.spell);
+    const petOk = () => { const p = this.pet(); return !petRule || !p || !p.exists || p.dead || p.hpPct >= 0.8; };
     while (Date.now() - t0 < timeout) {
       s = this.state();
       if (s.fight) return bail('бой во время отдыха');
-      if (s.hp / s.hpMax >= hpUntil) return bail('отдохнул');
+      if (petRule && this.petNeedsHeal(0.8)) {
+        const rec = (this.spells() || []).find(r => r.nameHash === petRule.spell);
+        if (rec && rec.ready === 1) await this.pressSpell(petRule.spell);
+      }
+      if (s.hp / s.hpMax >= hpUntil && petOk() && (!ate || !drinkKey || s.manaPct >= manaBelow)) return bail('отдохнул');
       await sleep(1000);
     }
     return bail('отдых: таймаут');

@@ -21,6 +21,12 @@ Object.assign(bot, {
   grindSpots: [],
   grindStats: null,
 
+  // посчитать причину отказа от цели в статистике гринда (видно в get_state → grind.rejects)
+  noteReject(reason) {
+    const st = this.grindStats; if (!st || !reason || reason === 'нет цели') return;
+    st.rejects = st.rejects || {}; st.rejects[reason] = (st.rejects[reason] || 0) + 1;
+  },
+
   // null — цель подходит; иначе строка-причина отказа
   targetProblem(s) {
     if (!s.target || !s.enemy || s.targetHp === 0) return 'нет цели';
@@ -29,17 +35,34 @@ Object.assign(bot, {
     if (s.tFlags & 4) return 'чужой моб';
     if (s.tLvl > this.grindCfg.maxLvlDiff) return 'слишком сильный';
     if (s.tLvl < this.grindCfg.minLvlDiff) return 'слишком слабый';
+    const cc = this.combatCfg && this.combatCfg(), p = this.pet && this.pet();
+    if (cc && cc.beastsOnly && p && p.exists && !p.tBeast) return 'не зверь';
     return null;
+  },
+
+  // цель подходит и (для стрелка) достаётся выстрелом
+  goodPullTarget(s) {
+    const why = this.targetProblem(s);
+    if (why) { this.noteReject(why); return false; }
+    const cc = this.combatCfg && this.combatCfg();
+    const ok = !cc || !cc.ranged || this.spellInRange(cc.shootSpell) === 1;
+    if (!ok) this.noteReject('далеко для выстрела');
+    return ok;
   },
 
   // Tab по кругу: 3 нажатия, поворот ~60°, и так 6 раз (полный оборот)
   async findTarget({ quick = false } = {}) {
     if (quick) {
-      // быстрый режим для проверки конкретной точки: один оборот Tab, без lookAround
-      for (let i = 0; i < 6 && this.grinding; i++) {
-        await this.tap('TAB'); await sleep(250);
-        const s = this.state();
-        if (!this.targetProblem(s)) return s;
+      // быстрый режим: полный оборот (3 × 120°), на каждом направлении 3 Tab; без lookAround.
+      // Tab выделяет только мобов впереди — без поворотов бот не видел мобов сбоку/сзади
+      // и убегал к старому месту мимо них.
+      for (let turn = 0; turn < 3 && this.grinding; turn++) {
+        for (let i = 0; i < 3 && this.grinding; i++) {
+          await this.tap('TAB'); await sleep(250);
+          const s = this.state();
+          { const why = this.targetProblem(s); if (!why) return s; this.noteReject(why); }
+        }
+        if (turn < 2) await this.turnTo(this.state().facing + 2.1);   // ~120°
       }
       if (!this.grinding) return null;
       await chat('/cleartarget');
@@ -49,7 +72,7 @@ Object.assign(bot, {
       for (let i = 0; i < 3 && this.grinding; i++) {
         await this.tap('TAB'); await sleep(250);
         const s = this.state();
-        if (!this.targetProblem(s)) return s;
+        { const why = this.targetProblem(s); if (!why) return s; this.noteReject(why); }
       }
       await this.hold('A', 330); await sleep(150);
     }
@@ -161,6 +184,8 @@ Object.assign(bot, {
       routeLength: this.patrolRoute.length, laps: 0,
       anchor: { x: anchor.x, y: anchor.y }, startedAt: t0, sells: 0
     };
+    const cc0 = this.combatCfg && this.combatCfg();
+    const scan = !!(cc0 && cc0.ranged);                   // стрелок ищет цели на бегу
     const out = r => { st.laps = this.patrolLaps || 0; this.stop(); return { result: r, stats: st, ...this.state() }; };
 
     if (mode === 'patrol' && !this.patrolRoute.length) {
@@ -205,13 +230,20 @@ Object.assign(bot, {
         continue;
       }
 
+      // на бегу уже выбрали подходящую цель (moveTo вернул 'цель') — начать бой отсюда, издалека
+      if (scan && this.goodPullTarget(this.state())) {
+        if (!(await this.approach())) { st.skipped++; await chat('/cleartarget'); continue; }
+        const p = await this.fightAndLoot(st); if (p) return out(p);
+        continue;
+      }
+
       if (mode === 'patrol') {
         // обход по кольцу: следующее место → на месте полный осмотр → бой/лут или empty++
         const spot = this.nextPointPatrol(s, anchor, cfg);
         st.laps = this.patrolLaps || 0;
         if (!spot) { st.wanders++; await sleep(500); continue; }
         st.spotVisits++;
-        const m = await this.moveTo(spot.x, spot.y, { tol: 0.4 });
+        const m = await this.moveTo(spot.x, spot.y, { tol: 0.4, scan });
         if (m.result === 'бой') continue;                   // напали по дороге — цикл сам отобьётся
         spot.visitedAt = Date.now();
         const t2 = await this.findTarget({ quick: false });  // на месте — полный осмотр
@@ -239,7 +271,7 @@ Object.assign(bot, {
         const spot = this.nextPointRadius(s, anchor, cfg);
         if (spot) {
           st.spotVisits++;
-          const m = await this.moveTo(spot.x, spot.y, { tol: 0.4 });
+          const m = await this.moveTo(spot.x, spot.y, { tol: 0.4, scan });
           if (m.result === 'бой') continue;                 // напали по дороге — цикл сам отобьётся
           spot.visitedAt = Date.now();
           const t2 = await this.findTarget({ quick: false }); // на месте — полный осмотр
@@ -257,7 +289,7 @@ Object.assign(bot, {
       st.wanders++;                                         // никого — побродить внутри радиуса
       if (st.wanders > 15 && st.kills === 0) return out('мобов поблизости не нашёл');
       const a = Math.random() * 2 * Math.PI, r = cfg.radius * (0.4 + 0.6 * Math.random());
-      await this.moveTo(anchor.x + r * Math.cos(a), anchor.y + r * Math.sin(a));
+      await this.moveTo(anchor.x + r * Math.cos(a), anchor.y + r * Math.sin(a), { scan });
     }
     return out('остановлен вручную');
   },

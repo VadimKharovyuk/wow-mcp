@@ -61,7 +61,7 @@ KEYS['0'] = KEYS[0];
 
 // ===== базовый объект бота =====
 window.bot = {
-  addr: null, stride: 0, saddr: null, sstride: 0, iaddr: null, istride: 0, held: {}, running: false, grinding: false, lastSpellAt: {}, warnings: [],
+  addr: null, stride: 0, saddr: null, sstride: 0, iaddr: null, istride: 0, qaddr: null, qstride: 0, held: {}, running: false, grinding: false, lastSpellAt: {}, warnings: [],
   lastKey: {}, grindStats: null,
   // активный профиль; переживает reload_bot через window.__wowProfile (страница при этом не перезагружается)
   profile: window.__wowProfile || null,
@@ -109,6 +109,18 @@ window.bot = {
     const i = await this.findTable(777005.5, 777006.5, 4);
     if (i) { this.iaddr = i[0]; this.istride = i[1]; console.log('НАШЁЛ I ✅', this.bags()); }
     else console.warn('Не нашёл I.');
+    const q = await this.findTable(777009.5, 777010.5, 2);
+    if (q) { this.qaddr = q[0]; this.qstride = q[1]; console.log('НАШЁЛ Q (питомец) ✅', this.pet()); }
+    else console.warn('Не нашёл Q (питомец).');
+  },
+
+  // Q-таблица: питомец. null — таблица не найдена (старый Lua).
+  // ttPlayer/ttPet — цель бьёт игрока/питомца; tBeast — цель того же типа, что питомец (зверь).
+  pet() {
+    if (this.qaddr == null) return null;
+    const H = this.mem(), g = n => H[this.qaddr + n * this.qstride];
+    return { exists: g(3) === 1, hpPct: +g(4).toFixed(2), dead: g(5) === 1, mend: g(6) === 1,
+             ttPlayer: g(7) === 1, ttPet: g(8) === 1, tBeast: g(9) === 1 };
   },
 
   state() {
@@ -122,7 +134,8 @@ window.bot = {
       moAlive: g(21) === 1, moLvl: g(22), kills: g(23), zone: g(24), pLvl: g(25),
       targetHpMax: g(26), targetHpPct: g(26) > 0 ? +(g(10) / g(26)).toFixed(2) : 0,
       useCount: g(27), useSlot: g(28),
-      luaVer: g(29)
+      luaVer: g(29),
+      pet: this.pet()
     };
   },
 
