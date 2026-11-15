@@ -138,5 +138,26 @@ final class SchemaInitializer {
                   note        text,
                   PRIMARY KEY (zone_id, cx, cy)
                 )""");
+        // граф дорог (задание 10): источник точек пути и сам граф. Старые записи — 'manual' (record_start).
+        jdbc.execute("ALTER TABLE path_point ADD COLUMN IF NOT EXISTS source varchar(10) NOT NULL DEFAULT 'manual'");
+        jdbc.execute("CREATE INDEX IF NOT EXISTS path_point_source_idx ON path_point (source, recorded_at)");
+        jdbc.execute("""
+                CREATE TABLE IF NOT EXISTS road_node (
+                  id   bigint PRIMARY KEY,
+                  zone int  NOT NULL,
+                  x    real NOT NULL,
+                  y    real NOT NULL
+                )""");
+        jdbc.execute("CREATE INDEX IF NOT EXISTS road_node_zone_idx ON road_node (zone)");
+        jdbc.execute("""
+                CREATE TABLE IF NOT EXISTS road_edge (
+                  a       bigint  NOT NULL,
+                  b       bigint  NOT NULL,
+                  cost    real    NOT NULL,
+                  fails   int     NOT NULL DEFAULT 0,
+                  ok      int     NOT NULL DEFAULT 0,
+                  learned boolean NOT NULL DEFAULT false,
+                  PRIMARY KEY (a, b)
+                )""");
     }
 }

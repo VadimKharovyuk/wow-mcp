@@ -27,12 +27,15 @@ public class PlaceTools {
     private final Database db;
     private final PlaceRepository places;
     private final RouteRepository routes;
+    private final Navigator navigator;
 
-    public PlaceTools(GameBridge bridge, Database db, PlaceRepository places, RouteRepository routes) {
+    public PlaceTools(GameBridge bridge, Database db, PlaceRepository places, RouteRepository routes,
+                      Navigator navigator) {
         this.bridge = bridge;
         this.db = db;
         this.places = places;
         this.routes = routes;
+        this.navigator = navigator;
     }
 
     @Tool(name = "remember_place", description = """
@@ -110,7 +113,7 @@ public class PlaceTools {
                 return JSON.writeValueAsString(Map.of("result", started, "via", "маршрут " + r[0], "points", seq.size()));
             }
         }
-        return jsonResult(bridge.start("go", List.of(tx, ty, Map.of("autoLoot", true))));
+        return navigator.start(tx, ty, true, true, true);
     }
 
     @Tool(name = "routes", description = "Список записанных маршрутов: имя, зона, начало, конец, длина, число точек.")

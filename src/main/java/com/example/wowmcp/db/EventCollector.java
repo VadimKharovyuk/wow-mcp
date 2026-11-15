@@ -31,6 +31,7 @@ public class EventCollector {
     private final KillRepository kills;
     private final SpellIdResolver spellIds;
     private final HuntRepository hunts;
+    private final com.example.wowmcp.roads.RoadService roads;
     private final PathRepository paths;
     private final ProfileRepository profiles;
     private final RotationLearner learner;
@@ -44,13 +45,14 @@ public class EventCollector {
     private final java.util.concurrent.atomic.AtomicInteger statDrains = new java.util.concurrent.atomic.AtomicInteger();
     private final java.util.concurrent.atomic.AtomicInteger statInsertErrors = new java.util.concurrent.atomic.AtomicInteger();
 
-    public EventCollector(GameBridge bridge, Database db, CastHistoryRepository casts, KillRepository kills, SpellIdResolver spellIds, HuntRepository hunts, PathRepository paths, ProfileRepository profiles, RotationLearner learner) {
+    public EventCollector(GameBridge bridge, Database db, CastHistoryRepository casts, KillRepository kills, SpellIdResolver spellIds, HuntRepository hunts, com.example.wowmcp.roads.RoadService roads, PathRepository paths, ProfileRepository profiles, RotationLearner learner) {
         this.bridge = bridge;
         this.db = db;
         this.casts = casts;
         this.kills = kills;
         this.spellIds = spellIds;
         this.hunts = hunts;
+        this.roads = roads;
         this.paths = paths;
         this.profiles = profiles;
         this.learner = learner;
@@ -137,6 +139,20 @@ public class EventCollector {
                     kills.insertMobKill(zone == null ? 0 : zone, x == null ? 0 : x, y == null ? 0 : y,
                             mobLevel, playerLevel, source, at == 0 ? System.currentTimeMillis() : at);
                 }
+            } else if ("road".equals(type)) {
+                if (db.isEnabled()) {
+                    Integer zone = asInt(ev.get("zone"));
+                    Double ax = asDouble(ev.get("ax")), ay = asDouble(ev.get("ay")), bx = asDouble(ev.get("bx")), by = asDouble(ev.get("by"));
+                    String kind = str(ev.get("kind"));
+                    if (zone != null && ax != null && ay != null && bx != null && by != null && kind != null) {
+                        switch (kind) {
+                            case "learn" -> roads.learnEdge(zone, ax, ay, bx, by);
+                            case "ok" -> roads.legResult(zone, ax, ay, bx, by, true);
+                            case "fail" -> roads.legResult(zone, ax, ay, bx, by, false);
+                            default -> { }
+                        }
+                    }
+                }
             } else if ("hunt".equals(type)) {
                 if (db.isEnabled()) {
                     Integer zoneId = asInt(ev.get("zoneId"));
@@ -155,8 +171,10 @@ public class EventCollector {
                     Double x = asDouble(ev.get("x"));
                     Double y = asDouble(ev.get("y"));
                     long at = asLong(ev.get("at"));
+                    String source = str(ev.get("source"));
                     paths.insertPathPoint(sessionId, zone == null ? 0 : zone, x == null ? 0 : x,
-                            y == null ? 0 : y, at == 0 ? System.currentTimeMillis() : at);
+                            y == null ? 0 : y, at == 0 ? System.currentTimeMillis() : at,
+                            source == null || source.isBlank() ? "manual" : source);
                 }
             }
         }

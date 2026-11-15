@@ -16,12 +16,13 @@ public class PathRepository extends BaseRepository {
         super(db);
     }
 
-    public void insertPathPoint(String sessionId, int zone, double x, double y, long atMillis) {
+    /** source: manual (record_start), player (игрок ведёт сам), bot (движение бота). */
+    public void insertPathPoint(String sessionId, int zone, double x, double y, long atMillis, String source) {
         if (!isEnabled()) return;
         try {
             jdbc().update(
-                    "INSERT INTO path_point (session_id,zone,x,y,recorded_at) VALUES (?,?,?,?,?)",
-                    sessionId, zone, x, y, new Timestamp(atMillis));
+                    "INSERT INTO path_point (session_id,zone,x,y,recorded_at,source) VALUES (?,?,?,?,?,?)",
+                    sessionId, zone, x, y, new Timestamp(atMillis), source == null ? "manual" : source);
         } catch (Exception e) {
             log.warn("Не удалось записать точку пути: {}", e.getMessage(), e);
             db.disable();

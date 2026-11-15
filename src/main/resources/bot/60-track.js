@@ -33,12 +33,17 @@ Object.assign(bot, {
         mobLevel: this.lastTLvl === null ? null : s.pLvl + this.lastTLvl, playerLevel: s.pLvl,
         source: this.botActedWithin(3000) ? 'bot' : 'player', at: Date.now() });
     }
-    if (this.recording && (s.x || s.y)) {
-      const p = this.lastPathPt;
-      if (!p || p.zone !== s.zone || Math.hypot(s.x - p.x, s.y - p.y) >= 0.3) {
-        this.lastPathPt = { zone: s.zone, x: s.x, y: s.y };
-        this.events.push({ type: 'path', zone: s.zone, x: s.x, y: s.y, session: this.recSession, at: Date.now() });
+    if (this.recording) {
+      // ручная запись (record_start): source 'manual' — «важный» путь для маршрутов и графа дорог
+      if (s.x || s.y) {
+        const p = this.lastPathPt;
+        if (!p || p.zone !== s.zone || Math.hypot(s.x - p.x, s.y - p.y) >= 0.3) {
+          this.lastPathPt = { zone: s.zone, x: s.x, y: s.y };
+          this.events.push({ type: 'path', zone: s.zone, x: s.x, y: s.y, session: this.recSession, source: 'manual', at: Date.now() });
+        }
       }
+    } else {
+      this.trackAutoPath(s);
     }
 
     // Применения заклинаний: Lua-счётчик S[3] растёт на каждое UNIT_SPELLCAST_SUCCEEDED
@@ -73,6 +78,24 @@ Object.assign(bot, {
     // key_press больше не наполняем (дублирует spell_cast и путает обучение).
     // Нажатия через UseAction больше не пишутся в события.
     if (this.events.length > 5000) this.events.splice(0, this.events.length - 5000);
+  },
+  // Постоянная запись пути: всегда, пока персонаж в мире. source: 'player' — ведёт игрок (бот не действовал
+  // последние 5 с), 'bot' — движение бота. Новый трек (session): пауза > 30 с, смена зоны, смерть, скачок > 5 ед.
+  // (телепорт) или смена источника. Точка: смещение ≥ 0.3 ед. или (раз в ~1 с и смещение ≥ 0.05).
+  trackAutoPath(s) {
+    if (this.dead && this.dead()) { this.autoSession = null; this.lastAutoPt = null; return; }
+    if (!s.x && !s.y) return;
+    const now = Date.now(), src = this.botActedWithin(5000) ? 'bot' : 'player', p = this.lastAutoPt;
+    if (!this.autoSession || !p || p.zone !== s.zone || p.src !== src || now - p.at > 30000
+        || Math.hypot(s.x - p.x, s.y - p.y) > 5) {
+      this.autoSession = 'auto-' + now.toString(36) + '-' + src[0];
+      this.lastAutoPt = null;
+    }
+    const q = this.lastAutoPt, moved = q ? Math.hypot(s.x - q.x, s.y - q.y) : Infinity;
+    if (!q || moved >= 0.3 || (now - q.at >= 1000 && moved >= 0.05)) {
+      this.lastAutoPt = { zone: s.zone, x: s.x, y: s.y, at: now, src };
+      this.events.push({ type: 'path', zone: s.zone, x: s.x, y: s.y, session: this.autoSession, source: src, at: now });
+    }
   },
   startTracker() {
     if (this.trackInt) return;

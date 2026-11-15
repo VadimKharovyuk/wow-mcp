@@ -82,6 +82,12 @@ public class Database {
         closeQuietly();
     }
 
+    /** Выполнить действие в одной транзакции (иначе при сбое половина записей останется). */
+    void inTransaction(Runnable action) {
+        new org.springframework.transaction.support.TransactionTemplate(
+                new org.springframework.jdbc.support.JdbcTransactionManager(dataSource)).executeWithoutResult(s -> action.run());
+    }
+
     void insertSucceeded() {
         failuresInARow = 0;
     }

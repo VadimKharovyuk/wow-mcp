@@ -5,6 +5,7 @@ import com.example.wowmcp.tools.GrindTools;
 import com.example.wowmcp.tools.HuntTools;
 import com.example.wowmcp.tools.InventoryTools;
 import com.example.wowmcp.tools.PlaceTools;
+import com.example.wowmcp.tools.RoadTools;
 import com.example.wowmcp.tools.RecordingTools;
 import com.example.wowmcp.tools.RotationTools;
 import org.springframework.ai.tool.ToolCallbackProvider;
@@ -28,9 +29,9 @@ public class WowMcpApplication {
     @Bean
     public ToolCallbackProvider wowToolCallbacks(BotActionTools actions, GrindTools grind,
                                                  RecordingTools recording, RotationTools rotation,
-                                                 InventoryTools inventory, PlaceTools places, HuntTools hunt) {
+                                                 InventoryTools inventory, PlaceTools places, HuntTools hunt, RoadTools roadTools) {
         return MethodToolCallbackProvider.builder()
-                .toolObjects(actions, grind, recording, rotation, inventory, places, hunt)
+                .toolObjects(actions, grind, recording, rotation, inventory, places, hunt, roadTools)
                 .build();
     }
 

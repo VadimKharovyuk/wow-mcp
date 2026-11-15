@@ -28,9 +28,11 @@ public class BotActionTools {
     private static final int WAIT_JOB_MAX_SECONDS = 60;
 
     private final GameBridge bridge;
+    private final Navigator navigator;
 
-    public BotActionTools(GameBridge bridge) {
+    public BotActionTools(GameBridge bridge, Navigator navigator) {
         this.bridge = bridge;
+        this.navigator = navigator;
     }
 
     @Tool(name = "get_state", description = """
@@ -51,10 +53,12 @@ public class BotActionTools {
             @ToolParam(description = "Координата X в зоне, от 0 до 100") double x,
             @ToolParam(description = "Координата Y в зоне, от 0 до 100") double y,
             @ToolParam(required = false, description = "Собирать добычу после боя, по умолчанию true")
-            Boolean autoLoot) {
+            Boolean autoLoot,
+            @ToolParam(required = false, description = "Идти по графу дорог, если он помогает (build_roads), по умолчанию true")
+            Boolean useRoads) {
         validateCoordinates(x, y);
         boolean loot = autoLoot == null || autoLoot;
-        return jsonResult(bridge.start("go", List.of(x, y, Map.of("autoLoot", loot))));
+        return navigator.start(x, y, true, loot, useRoads == null || useRoads);
     }
 
     @Tool(name = "move_to", description = """
@@ -62,9 +66,11 @@ public class BotActionTools {
             Останавливается, если напали мобы. Работает в фоне — результат смотри через wait_job.""")
     public String moveTo(
             @ToolParam(description = "Координата X в зоне, от 0 до 100") double x,
-            @ToolParam(description = "Координата Y в зоне, от 0 до 100") double y) {
+            @ToolParam(description = "Координата Y в зоне, от 0 до 100") double y,
+            @ToolParam(required = false, description = "Идти по графу дорог, если он помогает (build_roads), по умолчанию true")
+            Boolean useRoads) {
         validateCoordinates(x, y);
-        return jsonResult(bridge.start("moveTo", List.of(x, y)));
+        return navigator.start(x, y, false, false, useRoads == null || useRoads);
     }
 
     @Tool(name = "fight", description = """
