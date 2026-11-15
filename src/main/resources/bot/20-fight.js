@@ -14,7 +14,7 @@ Object.assign(bot, {
   // shootSpell — по нему проверяем «достаю выстрелом»; meleeSpell — «моб вплотную» (мёртвая зона).
   combatCfg() {
     const C = {
-      hunter: { ranged: true, petCallKey: '6' /* Призыв питомца */, minAmmo: 200,
+      hunter: { ranged: true, petCallKey: '6' /* Призыв питомца */, revivePetSpell: 1068909352 /* Воскрешение питомца (982) */, minAmmo: 200,
                 // Замораживающая ловушка (аварийная): HP ниже trapBelowHpPct, моб вплотную и бьёт охотника — поставить
                 // и пятиться. Пока ловушки нет в панели умений (не выучена), правило молча пропускается.
                 trapSpell: 197174967 /* Замораживающая ловушка */, trapBelowHpPct: 0.7,

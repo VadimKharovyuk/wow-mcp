@@ -125,19 +125,42 @@ Object.assign(bot, {
     return false;
   },
 
-  // стрелку нужен питомец: нет — вызвать (клавиша petCallKey, каст ~5 с); мёртв — 'dead' (гринд встанет на паузу).
-  // 'ok' — питомец есть или данных нет (старый Lua / не стрелок); 'none' — вызвать не удалось.
+  // Стрелку нужен питомец. Нет — вызвать (клавиша petCallKey, каст ~5 с); не вышло (питомец погиб — после смерти
+  // охотника это обычное дело) — «Воскрешение питомца» (revivePetSpell, нужна на панели с клавишей, каст ~10 с).
+  // 'ok' — питомец есть или данных нет (старый Lua / не стрелок); 'dead' — мёртв и воскресить не вышло (гринд на паузу);
+  // 'none' — вызвать не удалось. В бою не колдуем.
   async ensurePet(cc) {
     const p = this.pet();
     if (!p || !cc || !cc.petCallKey) return 'ok';
-    if (p.exists && p.dead) return 'dead';
-    if (p.exists || this.state().fight) return 'ok';
-    await this.tap(cc.petCallKey);
-    await sleep(500);
-    await this.waitFor(() => !this.casting(), 8000, 250, () => !this.grinding);
-    await sleep(500);
+    const alive = () => { const q = this.pet(); return !!(q && q.exists && !q.dead); };
+    if (alive() || this.state().fight) return 'ok';
+    const stopped = () => !this.grinding && this.job.name !== 'revive';
+    const waitCast = async () => {
+      await sleep(600);
+      await this.waitFor(() => !this.casting(), 15000, 250, stopped);
+      await sleep(800);
+    };
+    // 1) питомца нет совсем — призыв
+    if (!p.exists) {
+      await this.tap(cc.petCallKey);
+      await waitCast();
+      if (alive()) return 'ok';
+    }
+    // 2) мёртв (или призыв не помог) — воскрешение питомца
+    const rec = cc.revivePetSpell && (this.spells() || []).find(r => r.nameHash === cc.revivePetSpell);
+    if (rec && rec.ready === 1) {
+      if (await this.pressSpell(cc.revivePetSpell)) {
+        this.warnings.push('воскрешаю питомца');
+        if (this.warnings.length > 20) this.warnings.shift();
+        await waitCast();
+        if (alive()) return 'ok';
+      }
+    } else {
+      this.warnings.push(rec ? 'воскрешение питомца не готово' : 'нет «Воскрешения питомца» на панели умений — положи на панель с клавишей');
+      if (this.warnings.length > 20) this.warnings.shift();
+    }
     const q = this.pet();
-    return q && q.exists ? 'ok' : 'none';
+    return q && q.exists && q.dead ? 'dead' : 'none';
   },
 
   // питомцу пора на лечение: есть правило лечения питомца, питомец жив, HP низкое, лечение не висит.

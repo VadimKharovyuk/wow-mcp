@@ -36,7 +36,8 @@ public class LearnPolicy {
             "Кормление питомца",       // 6991
             "Лечение питомца",         // 136
             "Замораживающая ловушка",  // ставится по ситуации (аварийно), а не по ротации
-            "Притвориться мёртвым");   // последнее средство при HP < 15%, не часть ротации
+            "Притвориться мёртвым",    // последнее средство при HP < 15%, не часть ротации
+            "Воскрешение питомца");    // 982, вызывается ensurePet, а не ротацией
 
     private static final Set<Integer> EXCLUDED_HASHES = new HashSet<>();
 
@@ -50,7 +51,7 @@ public class LearnPolicy {
      * spellId служебных заклинаний, которые не учим: Автоматическая стрельба, Атака, Кормление питомца,
      * Призыв и Отпустить питомца, Лечение питомца. Работает и без знания nameHash (spell_id пишется в spell_cast).
      */
-    private static final Set<Integer> EXCLUDED_SPELL_IDS = Set.of(75, 6603, 6991, 883, 2641, 136);
+    private static final Set<Integer> EXCLUDED_SPELL_IDS = Set.of(75, 6603, 6991, 883, 2641, 136, 982);
 
     private final Set<String> disabledProfiles;
     private final Set<Integer> excludedSpellIds;
