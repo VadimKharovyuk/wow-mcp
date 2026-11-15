@@ -1,10 +1,33 @@
+# ===== Памятка запуска (это заметка, не скрипт; подробнее: docs/ЗАПУСК.md) =====
+
+# --- 1. Всё сразу: собрать, запустить Chrome с игрой, открыть OpenCode ---
 ~/Downloads/wow-mcp/deploy.sh
 
 
-
+# --- 2. Только Chrome с игрой (если deploy.sh не нужен) ---
 /Applications/Google\ Chrome.app/Contents/MacOS/Google\ Chrome \
   --remote-debugging-port=9222 \
   --user-data-dir="$HOME/chrome-wow" \
   --disable-background-timer-throttling \
   --disable-renderer-backgrounding \
   --disable-backgrounding-occluded-windows
+
+
+# --- 3. Управление через Telegram (без OpenCode) ---
+# Запуск: собрать и запустить контроллер (в отдельной вкладке терминала; остановка — Ctrl+C)
+cd ~/Downloads/wow-mcp
+./mvnw -q package -DskipTests
+./controller.sh
+
+# Перезапуск контроллера (после правок telegram.local.properties или кода).
+# ПИД каждый раз новый — не подставляйте старый номер, а найдите так:
+kill $(pgrep -f "wow.controller=true")
+./controller.sh
+
+# Проверка, что работает:  tail -f logs/wow-mcp.log   (строка «Telegram: бот запущен, разрешённых чатов: 1»)
+
+
+# --- 4. Дашборд статистики (http://localhost:8085) ---
+java -jar dashboard/target/wow-dashboard.jar
+# Остановка: Ctrl+C, либо
+kill $(lsof -nP -t -iTCP:8085 -sTCP:LISTEN)

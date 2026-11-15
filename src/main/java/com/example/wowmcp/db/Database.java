@@ -48,7 +48,7 @@ public class Database {
             cfg.setJdbcUrl(url);
             cfg.setUsername(properties.dbUsername());
             cfg.setPassword(properties.dbPassword());
-            cfg.setMaximumPoolSize(2);
+            cfg.setMaximumPoolSize(4);   // одно соединение постоянно держит LeaderLock
             cfg.setConnectionTimeout(5000);
             dataSource = new HikariDataSource(cfg);
             dataSource.getConnection().close();
@@ -80,6 +80,11 @@ public class Database {
     void disable() {
         enabled = false;
         closeQuietly();
+    }
+
+    /** Отдельное соединение для долгоживущих сессионных блокировок (закрывать должен вызывающий). */
+    java.sql.Connection newConnection() throws java.sql.SQLException {
+        return dataSource.getConnection();
     }
 
     /** Выполнить действие в одной транзакции (иначе при сбое половина записей останется). */
