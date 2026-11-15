@@ -21,7 +21,7 @@ Object.assign(bot, {
         // дальность в spells() обновляется раз в 0.5 с — проверяем цель через 0.7 с после Tab
         if (tabAt && now - tabAt > 700) {
           tabAt = 0;
-          if (this.goodPullTarget(this.state())) return done('цель');
+          if (this.goodPullTarget(this.state(), { needRange: true })) return done('цель');
         } else if (!tabAt && now - lastTab > 1500) {
           lastTab = tabAt = now;
           await this.tap('TAB');

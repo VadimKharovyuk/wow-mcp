@@ -19,6 +19,9 @@ Object.assign(bot, {
   },
 
   async loot({ timeout = 8000 } = {}) {
+    // цель могла сброситься (добил питомец, Tab): возвращаем выбор на последнюю — это труп убитого
+    { const s0 = this.state();
+      if (!s0.target || s0.targetHp > 0) { await chat('/targetlasttarget'); await this.waitFrames(2); } }
     await this.closeInOnCorpse();
     const b0 = this.bags();
     const lo0 = (this.deathInfo() || {}).lootOpened;      // счётчик LOOT_OPENED до клика

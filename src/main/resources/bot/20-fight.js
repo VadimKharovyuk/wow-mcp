@@ -234,6 +234,8 @@ Object.assign(bot, {
           if (r.repeatMs && (this.lastOkAt[r.spell] ?? -1e15) > fightStart && now - this.lastOkAt[r.spell] < r.repeatMs) continue;
           // лечение питомца целится в питомца — дальность до врага для него не важна
           if (!rec || rec.ready !== 1 || (rec.inRange === 0 && !r.maxPetHpPct)) continue;
+          // ближний удар стрелка — только когда точно вплотную (неизвестная дальность тоже «нет»)
+          if (cc && cc.meleeSpell && r.spell === cc.meleeSpell && rec.inRange !== 1) continue;
           if (r.maxHpPct && hpPct >= r.maxHpPct) continue;
           if (r.maxPetHpPct && !this.petNeedsHeal(r.maxPetHpPct)) continue;
           if (r.outOfCombatOnly && s.fight) continue;

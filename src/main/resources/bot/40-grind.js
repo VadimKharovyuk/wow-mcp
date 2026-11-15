@@ -46,14 +46,16 @@ Object.assign(bot, {
     return null;
   },
 
-  // цель подходит и (для стрелка) достаётся выстрелом
-  goodPullTarget(s) {
+  // Цель подходит. needRange (стрелок на бегу): ещё и достаётся выстрелом — иначе молча «пока нет», не отказ.
+  // Далёкая подходящая цель — не мусор: до неё дойдёт approach(), поэтому по дальности её здесь не отбрасываем.
+  goodPullTarget(s, { needRange = false } = {}) {
     const why = this.targetProblem(s);
     if (why) { this.noteReject(why); return false; }
     const cc = this.combatCfg && this.combatCfg();
-    const ok = !cc || !cc.ranged || this.spellInRange(cc.shootSpell) === 1;
-    if (!ok) this.noteReject('далеко для выстрела');
-    return ok;
+    if (needRange && cc && cc.ranged && this.spellInRange(cc.shootSpell) !== -1) {
+      return this.spellInRange(cc.shootSpell) === 1;
+    }
+    return true;
   },
 
   // Поиск по именам из базы мобов: Tab не видит нейтральных (жёлтых) мобов, а /target имя — видит.
@@ -71,6 +73,8 @@ Object.assign(bot, {
       await this.waitFrames(2);
       const s = this.state();
       if (this.goodPullTarget(s)) {
+        // /target имя берёт моба и за 40+ ярдов, и за спиной; берём только тех, кто ближе ~28 ярдов (tDist & 1)
+        if (!(s.tDist & 1)) { this.noteReject('вне дальности (>28 ярдов)'); continue; }
         if (this.grindStats) this.grindStats.byName = (this.grindStats.byName || 0) + 1;
         return s;
       }
@@ -145,15 +149,25 @@ Object.assign(bot, {
     return !!p && p.exists && !p.dead && !p.mend && p.hpPct < (cfg.petRestBelow ?? 0.5);
   },
 
+  // насколько близко цель по признакам игры: 0 — дальше 28 ярдов, 1 — ближе 28, 2 — ближе 11 ярдов
+  proximity() {
+    const d = this.state().tDist;
+    return (d & 2) ? 2 : (d & 1) ? 1 : 0;
+  },
+
   // подойти, пока умение агро не станет доступно (цель в его радиусе)
   async approach(maxMs = 6000) {
     // стрелок: идти, пока цель не достаётся выстрелом, и сразу остановиться (вплотную не подбегать)
     const cc = this.combatCfg && this.combatCfg();
     if (cc && cc.ranged && this.spellInRange(cc.shootSpell) !== -1) {
       const t1 = Date.now();
+      let best = this.proximity(), lastGain = t1;
       this.key('W', true);
       while (this.grinding && Date.now() - t1 < maxMs) {
         if (this.state().fight || this.spellInRange(cc.shootSpell) === 1) break;
+        // бежим прямо; если за 3.5 с ближе не стало (цель за спиной, обрыв, препятствие) — сдаёмся
+        const pr = this.proximity();
+        if (pr > best) { best = pr; lastGain = Date.now(); } else if (Date.now() - lastGain > 3500) break;
         await sleep(100);
       }
       this.key('W', false);
@@ -161,10 +175,13 @@ Object.assign(bot, {
     }
     const isReady = k => (this.state().ready >> (+k - 1)) & 1;
     const t0 = Date.now();
+    let best = this.proximity(), lastGain = t0;
     this.key('W', true);
     while (this.grinding && Date.now() - t0 < maxMs) {
       const s = this.state();
       if (s.fight || isReady(this.grindCfg.pullKey) || (s.tDist & 2)) break;
+      const pr = this.proximity();
+      if (pr > best) { best = pr; lastGain = Date.now(); } else if (Date.now() - lastGain > 3500) break;
       await sleep(150);
     }
     this.key('W', false);
@@ -268,6 +285,11 @@ Object.assign(bot, {
     const scan = !!(cc0 && cc0.ranged);                   // стрелок ищет цели на бегу
     // вложенный запуск из hunt (_sub): гасим только гринд, а не всю задачу
     const finish = () => { if (opts && opts._sub) { this.grinding = false; this.release(); } else this.stop(); };
+    // шаг в случайную точку внутри радиуса: после неудачного подхода не стоим на месте и не выбираем ту же цель
+    const wanderStep = async () => {
+      const a = Math.random() * 2 * Math.PI, r = cfg.radius * (0.4 + 0.6 * Math.random());
+      await this.moveTo(anchor.x + r * Math.cos(a), anchor.y + r * Math.sin(a), { scan });
+    };
     const out = r => { st.laps = this.patrolLaps || 0; finish(); return { result: r, stats: st, ...this.state() }; };
     // смерть: гринд завершается со статусом задачи 'dead'; воскрешение — отдельная задача (revive)
     const dieOut = () => {
@@ -383,9 +405,9 @@ Object.assign(bot, {
       }
 
       // на бегу уже выбрали подходящую цель (moveTo вернул 'цель') — начать бой отсюда, издалека
-      if (scan && this.goodPullTarget(this.state())) {
+      if (scan && this.goodPullTarget(this.state(), { needRange: true })) {
         progress();
-        if (!(await this.approach())) { st.skipped++; await chat('/cleartarget'); continue; }
+        if (!(await this.approach())) { st.skipped++; await chat('/cleartarget'); await wanderStep(); continue; }
         const p = await this.fightAndLoot(st); if (p) return out(p);
         continue;
       }
@@ -417,7 +439,7 @@ Object.assign(bot, {
       if (!this.grinding) break;
       if (tgt) {
         progress();
-        if (!(await this.approach())) { st.skipped++; await chat('/cleartarget'); continue; }
+        if (!(await this.approach())) { st.skipped++; await chat('/cleartarget'); await wanderStep(); continue; }
         const p = await this.fightAndLoot(st); if (p) return out(p);
         continue;
       }
@@ -444,8 +466,7 @@ Object.assign(bot, {
 
       st.wanders++;                                         // никого — побродить внутри радиуса
       if (st.wanders > 15 && st.kills === 0) return out('мобов поблизости не нашёл');
-      const a = Math.random() * 2 * Math.PI, r = cfg.radius * (0.4 + 0.6 * Math.random());
-      await this.moveTo(anchor.x + r * Math.cos(a), anchor.y + r * Math.sin(a), { scan });
+      await wanderStep();
     }
     return out('остановлен вручную');
   },
