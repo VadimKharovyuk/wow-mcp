@@ -237,6 +237,8 @@ Object.assign(bot, {
     const soldDelta = Math.max(0, (after.sold || 0) - soldBefore);
     const moneyDelta = (after.money || 0) - moneyBefore;
     const soldOk = soldDelta > 0 || moneyDelta > 0 || (before.toSell === 0 && after.toSell === 0);
+    this.events.push({ type: 'sell', source: 'bot', vendor: vendor.name, sold: soldDelta, moneyDelta, freeAfter: after.free,
+                       ok: soldOk, zone: this.state().zone, at: Date.now() });
     return {
       result: soldOk ? 'продано' : 'продажа не завершена',
       sold: soldDelta,

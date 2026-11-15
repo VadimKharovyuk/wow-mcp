@@ -49,6 +49,10 @@ Object.assign(bot, {
               const lo1 = (this.deathInfo() || {}).lootOpened;
               const opened = lo0 != null && lo1 != null && lo1 > lo0;   // окно добычи открывалось (даже мгновенный автолут)
               const gained = opened || sawWindow || b1.free < b0.free || (b1.money || 0) > (b0.money || 0);
+              if (!gained) {
+                this.events.push({ type: 'lootmiss', result: 'пустой труп или не открылся', source: 'bot',
+                                   zone: s.zone, x: s.x, y: s.y, at: Date.now() });
+              }
               return { result: gained ? 'добыча собрана' : 'пустой труп или не открылся', point: [fx, fy], ...s };
             }
           }
@@ -66,6 +70,8 @@ Object.assign(bot, {
     const s = this.state();
     const info = { scanned, moDeadSeen: sawDead, targetDead: !!s.target && s.targetHp === 0, tDist: s.tDist, lootN: s.lootN };
     console.warn('лут: труп не найден', info);
+    this.events.push({ type: 'lootmiss', result: 'труп не найден', source: 'bot', zone: s.zone, x: s.x, y: s.y,
+                       scanned, moDeadSeen: sawDead, tDist: s.tDist, at: Date.now() });
     this.warnings.push('лут: труп не найден ' + JSON.stringify(info));
     if (this.warnings.length > 20) this.warnings.shift();
     return { result: 'труп не найден под курсором', loot: info, ...s };

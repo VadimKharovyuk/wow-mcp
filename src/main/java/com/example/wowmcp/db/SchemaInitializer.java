@@ -159,5 +159,31 @@ final class SchemaInitializer {
                   learned boolean NOT NULL DEFAULT false,
                   PRIMARY KEY (a, b)
                 )""");
+        // статистика игры для дашборда (модуль dashboard/ читает эти таблицы только на чтение)
+        jdbc.execute("""
+                CREATE TABLE IF NOT EXISTS bot_job (
+                  uid        text PRIMARY KEY,
+                  name       text        NOT NULL,
+                  started_at timestamptz NOT NULL,
+                  ended_at   timestamptz,
+                  status     text,
+                  result     text,
+                  data       jsonb
+                )""");
+        jdbc.execute("CREATE INDEX IF NOT EXISTS bot_job_started_idx ON bot_job (started_at)");
+        jdbc.execute("""
+                CREATE TABLE IF NOT EXISTS game_event (
+                  id      bigserial PRIMARY KEY,
+                  ts      timestamptz NOT NULL,
+                  type    text        NOT NULL,
+                  source  text,
+                  job_uid text,
+                  zone    int,
+                  x       real,
+                  y       real,
+                  data    jsonb
+                )""");
+        jdbc.execute("CREATE INDEX IF NOT EXISTS game_event_type_ts_idx ON game_event (type, ts)");
+        jdbc.execute("ALTER TABLE mob_kill ADD COLUMN IF NOT EXISTS job_uid text");
     }
 }

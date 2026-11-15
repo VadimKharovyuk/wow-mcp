@@ -124,7 +124,7 @@ window.bot = {
     const H = this.mem(), g = n => H[this.daddr + n * this.dstride];
     return { dead: g(3) === 1, ghost: g(4) === 1,
              corpseX: +(g(5) * 100).toFixed(2), corpseY: +(g(6) * 100).toFixed(2),
-             recoveryDelay: g(7), zone: g(8), ammo: g(9), lootOpened: g(10) };
+             recoveryDelay: g(7), zone: g(8), ammo: g(9), lootOpened: g(10), xp: g(11), xpMax: g(12) };
   },
 
   // Q-таблица: питомец. null — таблица не найдена (старый Lua).
@@ -308,7 +308,7 @@ window.bot = {
     // Задача не должна остаться в статусе 'running': по нему 60-track.js решает,
     // что действие сделал бот, и тогда ручные нажатия игрока не пишутся в БД.
     if (this.job && this.job.status === 'running') {
-      this.job = { name: this.job.name, status: 'stopped', started: this.job.started, stoppedAt: Date.now(), id: this.job.id };
+      this.job = { name: this.job.name, status: 'stopped', started: this.job.started, stoppedAt: Date.now(), id: this.job.id, uid: this.job.uid };
     }
     this.release();
   },
@@ -331,12 +331,18 @@ window.bot = {
       return 'предыдущая задача ещё останавливается — повтори через секунду';
     }
     const id = this.jobSeq = (this.jobSeq || 0) + 1;
-    this.job = { name, status: 'running', started: Date.now(), id };
+    const uid = 'j' + Date.now().toString(36) + id;     // идентификатор запуска для статистики (БД: bot_job)
+    this.job = { name, status: 'running', started: Date.now(), id, uid };
     this.jobBusy = true;
+    this.events.push({ type: 'job', phase: 'start', uid, name, at: Date.now() });
+    // конец задачи → событие для статистики: статус, итог и сводка (статистика гринда/охоты)
+    const finished = (status, r) => this.events.push({ type: 'job', phase: 'end', uid, name, status: (r && r.status) || status,
+        result: r && r.result ? String(r.result).slice(0, 200) : null, stats: (r && r.stats) || null,
+        hunt: (r && r.hunt) || null, at: Date.now() });
     // Promise.resolve().then: синхронное исключение или не-промис тоже не оставят задачу в 'running'
     Promise.resolve().then(() => this[name](...args))
-        .then(r => { if (this.job.id === id) this.job = { name, status: 'done', id, ...r }; })
-        .catch(e => { if (this.job.id === id) this.job = { name, status: 'error', id, error: '' + e }; })
+        .then(r => { if (this.job.id === id) { this.job = { name, status: 'done', id, uid, ...r }; finished('done', r); } })
+        .catch(e => { if (this.job.id === id) { this.job = { name, status: 'error', id, uid, error: '' + e }; finished('error', { result: '' + e }); } })
         .finally(() => { if (this.jobSeq === id) this.jobBusy = false; });
     return 'запущено: ' + name;
   },

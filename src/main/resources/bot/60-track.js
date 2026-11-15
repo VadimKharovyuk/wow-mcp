@@ -31,8 +31,10 @@ Object.assign(bot, {
       this.lastKills++;
       this.events.push({ type: 'kill', zone: s.zone, x: s.x, y: s.y,
         mobLevel: this.lastTLvl === null ? null : s.pLvl + this.lastTLvl, playerLevel: s.pLvl,
-        source: this.botActedWithin(3000) ? 'bot' : 'player', at: Date.now() });
+        source: this.botActedWithin(3000) ? 'bot' : 'player',
+        jobUid: this.job && this.job.status === 'running' ? this.job.uid : null, at: Date.now() });
     }
+    this.trackStats(s);
     if (this.recording) {
       // ручная запись (record_start): source 'manual' — «важный» путь для маршрутов и графа дорог
       if (s.x || s.y) {
@@ -79,6 +81,34 @@ Object.assign(bot, {
     // Нажатия через UseAction больше не пишутся в события.
     if (this.events.length > 5000) this.events.splice(0, this.events.length - 5000);
   },
+  // Статистика для дашборда: открытие окна добычи (бот и игрок), смерть, снимки опыта и денег.
+  trackStats(s) {
+    const di = this.deathInfo();
+    if (!di) return;
+    const now = Date.now(), bot = this.botActedWithin(3000);
+    const jobUid = this.job && this.job.status === 'running' ? this.job.uid : null;
+    // LOOT_OPENED: счётчик из Lua растёт на каждое открытое окно добычи
+    if (this.lastLootOpened == null || di.lootOpened < this.lastLootOpened) this.lastLootOpened = di.lootOpened;
+    while (di.lootOpened > this.lastLootOpened) {
+      this.lastLootOpened++;
+      this.events.push({ type: 'loot', source: bot ? 'bot' : 'player', jobUid, zone: s.zone, x: s.x, y: s.y, at: now });
+    }
+    // смерть: переход жив → мёртв/призрак
+    const dead = di.dead || di.ghost;
+    if (dead && this.wasDead === false) {
+      const la = this.lastAlive || {};
+      this.events.push({ type: 'death', source: this.botActedWithin(10000) ? 'bot' : 'player', jobUid, zone: s.zone,
+        x: s.x, y: s.y, hpBefore: la.hpPct, manaBefore: la.manaPct, at: now });
+    }
+    this.wasDead = dead;
+    // снимок опыта и денег: при изменении, не чаще раза в 5 с (опыт в час, доход в час)
+    const money = this.bags().money || 0, snap = this.lastStat;
+    if (!snap || ((snap.xp !== di.xp || snap.money !== money || snap.level !== s.pLvl) && now - snap.at >= 5000)) {
+      this.lastStat = { xp: di.xp, money, level: s.pLvl, at: now };
+      this.events.push({ type: 'stat', level: s.pLvl, xp: di.xp, xpMax: di.xpMax, money, zone: s.zone, at: now });
+    }
+  },
+
   // Постоянная запись пути: всегда, пока персонаж в мире. source: 'player' — ведёт игрок (бот не действовал
   // последние 5 с), 'bot' — движение бота. Новый трек (session): пауза > 30 с, смена зоны, смерть, скачок > 5 ед.
   // (телепорт) или смена источника. Точка: смещение ≥ 0.3 ед. или (раз в ~1 с и смещение ≥ 0.05).

@@ -31,6 +31,7 @@ public class EventCollector {
     private final KillRepository kills;
     private final SpellIdResolver spellIds;
     private final HuntRepository hunts;
+    private final GameEventRepository gameEvents;
     private final com.example.wowmcp.roads.RoadService roads;
     private final PathRepository paths;
     private final ProfileRepository profiles;
@@ -45,17 +46,32 @@ public class EventCollector {
     private final java.util.concurrent.atomic.AtomicInteger statDrains = new java.util.concurrent.atomic.AtomicInteger();
     private final java.util.concurrent.atomic.AtomicInteger statInsertErrors = new java.util.concurrent.atomic.AtomicInteger();
 
-    public EventCollector(GameBridge bridge, Database db, CastHistoryRepository casts, KillRepository kills, SpellIdResolver spellIds, HuntRepository hunts, com.example.wowmcp.roads.RoadService roads, PathRepository paths, ProfileRepository profiles, RotationLearner learner) {
+    public EventCollector(GameBridge bridge, Database db, CastHistoryRepository casts, KillRepository kills, SpellIdResolver spellIds, HuntRepository hunts, GameEventRepository gameEvents, com.example.wowmcp.roads.RoadService roads, PathRepository paths, ProfileRepository profiles, RotationLearner learner) {
         this.bridge = bridge;
         this.db = db;
         this.casts = casts;
         this.kills = kills;
         this.spellIds = spellIds;
         this.hunts = hunts;
+        this.gameEvents = gameEvents;
         this.roads = roads;
         this.paths = paths;
         this.profiles = profiles;
         this.learner = learner;
+    }
+
+    /** События статистики (добыча, смерти, продажи, снимки опыта/денег): остальные поля уходят в data (jsonb). */
+    private static final java.util.Set<String> STAT_TYPES = java.util.Set.of("loot", "lootmiss", "death", "sell", "stat");
+    private static final java.util.Set<String> COMMON_FIELDS =
+            java.util.Set.of("type", "source", "jobUid", "zone", "x", "y", "at", "phase", "uid", "name", "status", "result");
+
+    /** Поля события без общих — JSON для колонки data. */
+    private String dataOf(Map<String, Object> ev) {
+        Map<String, Object> data = new java.util.LinkedHashMap<>();
+        for (Map.Entry<String, Object> e : ev.entrySet()) {
+            if (!COMMON_FIELDS.contains(e.getKey())) data.put(e.getKey(), e.getValue());
+        }
+        return data.isEmpty() ? null : json.writeValueAsString(data);
     }
 
     @Scheduled(fixedDelay = 3000)
@@ -137,7 +153,26 @@ public class EventCollector {
                     String source = String.valueOf(ev.get("source"));
                     long at = asLong(ev.get("at"));
                     kills.insertMobKill(zone == null ? 0 : zone, x == null ? 0 : x, y == null ? 0 : y,
-                            mobLevel, playerLevel, source, at == 0 ? System.currentTimeMillis() : at);
+                            mobLevel, playerLevel, source, at == 0 ? System.currentTimeMillis() : at,
+                            str(ev.get("jobUid")));
+                }
+            } else if ("job".equals(type)) {
+                if (db.isEnabled()) {
+                    String uid = str(ev.get("uid")), name = str(ev.get("name"));
+                    long at = asLong(ev.get("at"));
+                    if (at == 0) at = System.currentTimeMillis();
+                    if ("start".equals(str(ev.get("phase")))) {
+                        gameEvents.jobStart(uid, name, at);
+                    } else {
+                        gameEvents.jobEnd(uid, name, at, str(ev.get("status")), str(ev.get("result")), dataOf(ev));
+                    }
+                }
+            } else if (STAT_TYPES.contains(type)) {
+                if (db.isEnabled()) {
+                    long at = asLong(ev.get("at"));
+                    gameEvents.insertEvent(type, str(ev.get("source")), str(ev.get("jobUid")), asInt(ev.get("zone")),
+                            asDouble(ev.get("x")), asDouble(ev.get("y")), at == 0 ? System.currentTimeMillis() : at,
+                            dataOf(ev));
                 }
             } else if ("road".equals(type)) {
                 if (db.isEnabled()) {

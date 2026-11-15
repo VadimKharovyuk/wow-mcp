@@ -21,12 +21,12 @@ public class KillRepository extends BaseRepository {
     }
 
     public void insertMobKill(int zone, double x, double y, Integer mobLevel, Integer playerLevel,
-                              String source, long atMillis) {
+                              String source, long atMillis, String jobUid) {
         if (!isEnabled()) return;
         try {
             jdbc().update(
-                    "INSERT INTO mob_kill (zone,x,y,mob_level,player_level,source,killed_at) VALUES (?,?,?,?,?,?,?)",
-                    zone, x, y, mobLevel, playerLevel, source, new Timestamp(atMillis));
+                    "INSERT INTO mob_kill (zone,x,y,mob_level,player_level,source,killed_at,job_uid) VALUES (?,?,?,?,?,?,?,?)",
+                    zone, x, y, mobLevel, playerLevel, source, new Timestamp(atMillis), jobUid);
         } catch (Exception e) {
             log.warn("Не удалось записать убийство: {}", e.getMessage(), e);
             db.disable();
