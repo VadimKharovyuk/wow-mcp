@@ -29,7 +29,7 @@ Object.assign(bot, {
     return { ok: dist <= tol, dist };
   },
 
-  async _moveToVendorPoint(vendor, { tol = 0.12, maxLoops = 20 } = {}) {
+  async _moveToVendorPoint(vendor, { tol = 0.07, maxLoops = 12 } = {}) {
     const fightBack = async () => {
       const f = await this.fight();
       if (f.result !== 'бой окончен') {
@@ -39,30 +39,49 @@ Object.assign(bot, {
       return null;
     };
     for (let i = 0; i < maxLoops; i++) {
-      // точная попытка; время ограничено, иначе moveTo кружит вокруг точки
-      const r = await this.moveTo(vendor.x, vendor.y, { tol, timeout: 30000 });
-      if (r.result === 'дошёл') return { ok: true, result: r, dist: this._vendorDist(vendor) };
+      // 1) грубо: moveTo с малым tol кружит вокруг точки, поэтому сначала допуск 0.3 (~15 м)
+      const r = await this.moveTo(vendor.x, vendor.y, { tol: 0.3, timeout: 90000 });
       if (r.result === 'бой') {
         const bad = await fightBack();
         if (bad) return bad;
         continue;
       }
-      if (r.result === 'таймаут' || r.result === 'застрял') {
-        // попались грубо (tol 0.3) и доводим импульсами до tol
-        const g = await this.moveTo(vendor.x, vendor.y, { tol: 0.3, timeout: 45000 });
-        if (g.result === 'бой') {
-          const bad = await fightBack();
-          if (bad) return bad;
-          continue;
-        }
-        const n = await this._stepToVendor(vendor, { tol });
-        if (n.ok) return { ok: true, result: n, dist: n.dist };
-        if (n.reason === 'бой') continue;
-        return { ok: false, reason: 'не удалось подойти вплотную к торговцу', dist: n.dist };
+      if (r.result !== 'дошёл' && r.result !== 'таймаут') {
+        return { ok: false, result: r, reason: r.result, dist: this._vendorDist(vendor) };
       }
-      return { ok: false, result: r, reason: r.result, dist: this._vendorDist(vendor) };
+      // 2) точно: импульсы W с доворотом (окно торговца открывается только вплотную, ~5 м)
+      const n = await this._stepToVendor(vendor, { tol, tries: 12 });
+      if (n.ok) return { ok: true, result: n, dist: n.dist };
+      if (n.reason === 'бой') {
+        const bad = await fightBack();
+        if (bad) return bad;
+        continue;
+      }
+      // не получилось вплотную, но рядом — пусть sellAt попробует открыть окно с шагами вперёд
+      if (n.dist < 0.25) return { ok: true, result: n, dist: n.dist, approx: true };
+      return { ok: false, reason: 'не удалось подойти вплотную к торговцу', dist: n.dist };
     }
     return { ok: false, reason: 'не удалось дойти до торговца', dist: this._vendorDist(vendor) };
+  },
+
+  // шаг вперёд на ms мс в сторону торговца. Сохранённая точка — это место, где стоял игрок, а сам NPC
+  // чуть впереди него (по направлению facing). Рядом с точкой направление «на точку» бессмысленно
+  // (dx, dy ≈ 0), поэтому идём туда, куда смотрел игрок при запоминании.
+  async _walkTowardVendor(vendor, ms) {
+    const s = this.state();
+    const dx = vendor.x - s.x, dy = vendor.y - s.y;
+    if (Math.hypot(dx, dy) > 0.08) {
+      await this._faceTo(Math.atan2(-dx, -dy), { tol: 0.2, timeout: 1500 });
+    } else if (typeof vendor.facing === 'number' && isFinite(vendor.facing)) {
+      await this._faceTo(vendor.facing, { tol: 0.2, timeout: 1500 });
+    }
+    this.key('W', true);
+    try {
+      await sleep(ms);
+    } finally {
+      this.key('W', false);
+    }
+    await sleep(150);
   },
 
   _normAngle(a) { return Math.atan2(Math.sin(a), Math.cos(a)); },
@@ -123,7 +142,7 @@ Object.assign(bot, {
     const soldBefore = before.sold || 0;
 
     // 1) подойти вплотную к сохранённой точке (окно торговца открывается только вблизи)
-    const mv = await this._moveToVendorPoint(vendor, { tol: 0.12 });
+    const mv = await this._moveToVendorPoint(vendor, { tol: 0.07 });
     if (!mv.ok) {
       return { result: mv.reason || 'не удалось подойти к торговцу', detail: mv.result,
                dist: mv.dist, ...this.state() };
@@ -162,18 +181,7 @@ Object.assign(bot, {
         await chat('/run BOTSELL=1');
         // окно открывается только вплотную: нет за 2 с — шаг вперёд и клик снова (до 3 раз)
         for (let click = 0; click < 3 && !opened; click++) {
-          if (click > 0) {
-            const s = this.state();
-            const dx = vendor.x - s.x, dy = vendor.y - s.y;
-            await this._faceTo(Math.atan2(-dx, -dy), { tol: 0.2, timeout: 1500 });
-            this.key('W', true);
-            try {
-              await sleep(300);
-            } finally {
-              this.key('W', false);
-            }
-            await sleep(150);
-          }
+          if (click > 0) await this._walkTowardVendor(vendor, 300 + 150 * click);
           this.mouse(f.point[0], f.point[1], 'mousedown', 2);
           await sleep(60);
           this.mouse(f.point[0], f.point[1], 'mouseup', 2);
