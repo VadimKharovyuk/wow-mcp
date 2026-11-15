@@ -315,11 +315,19 @@ public class RotationLearner {
         if (rows.isEmpty()) {
             return new SpellLearn(null, false, 0, REQUIRED_IN_COMBAT);
         }
-        // Исключённые заклинания (автострельба, атака, кормление и лечение питомца) не учим
+        // Исключённые заклинания (автострельба, атака, кормление, призыв и лечение питомца) не учим:
+        // по nameHash и по spell_id (если по spell_id нашли хеш — исключаем его везде, в т.ч. как «после чего»)
+        Set<Integer> excluded = new HashSet<>();
+        for (Map<String, Object> r : rows) {
+            Integer hash = asInt(r.get("name_hash"));
+            if (hash != null && (policy.isExcluded(hash) || policy.isExcludedSpellId(asInt(r.get("spell_id"))))) {
+                excluded.add(hash);
+            }
+        }
         List<Map<String, Object>> history = new ArrayList<>();
         for (Map<String, Object> r : rows) {
             Integer hash = asInt(r.get("name_hash"));
-            if (hash == null || policy.isExcluded(hash)) continue;
+            if (hash == null || excluded.contains(hash)) continue;
             history.add(r);
         }
         if (history.isEmpty()) {
@@ -391,7 +399,7 @@ public class RotationLearner {
             for (Map<String, Object> r : cp) {
                 Integer pk = asInt(r.get("prev_spell"));
                 Integer pm = asInt(r.get("prev_spell_ms"));
-                if (pk != null && pm != null && pm <= 3000 && !policy.isExcluded(pk)) {
+                if (pk != null && pm != null && pm <= 3000 && !excluded.contains(pk) && !policy.isExcluded(pk)) {
                     byPrev.computeIfAbsent(pk, k -> new ArrayList<>()).add(pm);
                 }
             }

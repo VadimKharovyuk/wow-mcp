@@ -61,7 +61,10 @@ public class RotationTools {
             repeatMs — не повторять чаще, чем раз в repeatMs мс; \
             outOfCombatOnly (true/false) — только вне боя; \
             waitAfter {spell|key, ms} — не переходить к следующим умениям, пока с нажатия прошло меньше ms. \
-            Правила с maxHpPct, maxPetHpPct, repeatMs или key автообучение не затирает.""")
+            Макросы и умения без nameHash задаются через key (слот 1–9 панели), например {"key":"9"} — /startattack. \
+            Правила с maxHpPct, maxPetHpPct, repeatMs или key автообучение не затирает. \
+            Пример: [{"spell":1672233375,"maxHpPct":0.45},{"spell":1700418603,"outOfCombatOnly":true},\
+            {"spell":1568831975,"waitAfter":{"spell":1700418603,"ms":2300}},{"spell":2037478445},{"key":"9"}].""")
     public String setRotation(
             @ToolParam(description = "JSON-массив v2: [{\"spell\":123,\"maxPetHpPct\":0.5},"
                     + "{\"spell\":456,\"repeatMs\":15000},{\"spell\":789,\"maxHpPct\":0.35,"

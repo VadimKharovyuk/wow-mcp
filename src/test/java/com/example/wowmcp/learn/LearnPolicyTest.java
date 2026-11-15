@@ -47,4 +47,14 @@ class LearnPolicyTest {
         assertThat(LearnPolicy.isManualRule(Map.of("spell", 1, "maxHpPct", 0.4, "learned", true))).isFalse();
         assertThat(LearnPolicy.isManualRule(null)).isFalse();
     }
+
+    @Test
+    void excludesServiceSpellsBySpellId() {
+        for (int id : new int[]{75, 6603, 6991, 883, 2641, 136}) {
+            assertThat(policy.isExcludedSpellId(id)).as("spellId %d", id).isTrue();
+        }
+        assertThat(policy.isExcludedSpellId(3044)).isFalse();        // Чародейский выстрел
+        assertThat(policy.isExcludedSpellId(null)).isFalse();
+        assertThat(new LearnPolicy(List.of(), List.of(3044)).isExcludedSpellId(3044)).isTrue();   // из конфига
+    }
 }

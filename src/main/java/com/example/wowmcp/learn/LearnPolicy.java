@@ -1,5 +1,6 @@
 package com.example.wowmcp.learn;
 
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
@@ -43,14 +44,35 @@ public class LearnPolicy {
         }
     }
 
-    private final Set<String> disabledProfiles;
+    /**
+     * spellId служебных заклинаний, которые не учим: Автоматическая стрельба, Атака, Кормление питомца,
+     * Призыв и Отпустить питомца, Лечение питомца. Работает и без знания nameHash (spell_id пишется в spell_cast).
+     */
+    private static final Set<Integer> EXCLUDED_SPELL_IDS = Set.of(75, 6603, 6991, 883, 2641, 136);
 
-    public LearnPolicy(@Value("${wow.learn.disabled-profiles:}") List<String> disabledProfiles) {
+    private final Set<String> disabledProfiles;
+    private final Set<Integer> excludedSpellIds;
+
+    @Autowired
+    public LearnPolicy(@Value("${wow.learn.disabled-profiles:}") List<String> disabledProfiles,
+                       @Value("${wow.learn.excluded-spell-ids:}") List<Integer> extraExcludedSpellIds) {
         Set<String> set = new HashSet<>();
         for (String p : disabledProfiles) {
             if (p != null && !p.isBlank()) set.add(p.trim());
         }
         this.disabledProfiles = Set.copyOf(set);
+        Set<Integer> ids = new HashSet<>(EXCLUDED_SPELL_IDS);
+        ids.addAll(extraExcludedSpellIds);
+        this.excludedSpellIds = Set.copyOf(ids);
+    }
+
+    public LearnPolicy(List<String> disabledProfiles) {
+        this(disabledProfiles, List.of());
+    }
+
+    /** Исключено ли заклинание по spellId (из spell_cast.spell_id). */
+    public boolean isExcludedSpellId(Integer spellId) {
+        return spellId != null && excludedSpellIds.contains(spellId);
     }
 
     /** nameHash локализованного названия: h = (h*31 + байт UTF-8) mod 2147483647. */

@@ -101,4 +101,22 @@ class RotationLearnerTest {
         // иначе EventCollector сравнивал бы с отфильтрованным числом и переучивал на каждом тике
         assertThat(learner.lastLearnedCount("hunter")).isEqualTo(history().size());
     }
+
+    @Test
+    void excludesBySpellIdEvenWhenNameHashIsUnknown() {
+        List<Map<String, Object>> rows = new ArrayList<>(history());
+        int summonHash = 777;   // «Призыв питомца»: хеш неизвестен, но spell_id 883 задан
+        for (int i = 0; i < 20; i++) {
+            Map<String, Object> r = cast(summonHash, true, null, null);
+            r.put("spell_id", 883);
+            rows.add(r);
+            Map<String, Object> after = cast(ARCANE, true, summonHash, 300);   // «после призыва» не должно стать waitAfter
+            rows.add(after);
+        }
+        RotationLearner.SpellLearn res = learner(rows).learnSpells("hunter", List.of());
+
+        List<Object> spells = res.result().rotation().stream().map(r -> r.get("spell")).toList();
+        assertThat(spells).doesNotContain(summonHash);
+        assertThat(res.result().rotation()).allSatisfy(r -> assertThat(r).doesNotContainKey("waitAfter"));
+    }
 }
