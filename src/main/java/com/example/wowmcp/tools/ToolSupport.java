@@ -48,10 +48,4 @@ final class ToolSupport {
         }
         return vendor;
     }
-
-    static Integer asInt(Object v) {
-        if (v == null) return null;
-        if (v instanceof Number n) return n.intValue();
-        try { return Integer.parseInt(String.valueOf(v)); } catch (NumberFormatException e) { return null; }
-    }
 }

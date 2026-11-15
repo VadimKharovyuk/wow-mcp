@@ -9,6 +9,12 @@ import org.springframework.stereotype.Component;
 import tools.jackson.core.type.TypeReference;
 import tools.jackson.databind.ObjectMapper;
 
+import static com.example.wowmcp.util.Values.asBool;
+import static com.example.wowmcp.util.Values.asDouble;
+import static com.example.wowmcp.util.Values.asInt;
+import static com.example.wowmcp.util.Values.asLong;
+import static com.example.wowmcp.util.Values.str;
+
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -144,7 +150,7 @@ public class EventCollector {
         }
 
         // Автообучение: если профиль активен и накопилось >=40 новых применений
-        if (db.isEnabled() && lastProfile != null) {
+        if (db.isEnabled() && lastProfile != null && learner.isAutoLearnEnabled(lastProfile)) {
             try {
                 String activeProfile = String.valueOf(bridge.eval("() => bot.profile"));
                 if (lastProfile.equals(activeProfile)) {
@@ -197,35 +203,5 @@ public class EventCollector {
                 statCasts.getAndSet(0), statKills.getAndSet(0), statCastsInserted.getAndSet(0),
                 statKeys.getAndSet(0), statDrains.getAndSet(0), statInsertErrors.getAndSet(0),
                 db.isEnabled() ? "включена" : "выключена");
-    }
-
-    private static Integer asInt(Object v) {
-        if (v == null) return null;
-        if (v instanceof Number n) return n.intValue();
-        try { return Integer.parseInt(String.valueOf(v)); } catch (NumberFormatException e) { return null; }
-    }
-
-    private static Double asDouble(Object v) {
-        if (v == null) return null;
-        if (v instanceof Number n) return n.doubleValue();
-        try { return Double.parseDouble(String.valueOf(v)); } catch (NumberFormatException e) { return null; }
-    }
-
-    private static long asLong(Object v) {
-        if (v instanceof Number n) return n.longValue();
-        try { return Long.parseLong(String.valueOf(v)); } catch (NumberFormatException e) { return 0; }
-    }
-
-    private static String str(Object v) {
-        return v == null ? null : String.valueOf(v).trim();
-    }
-
-    private static Boolean asBool(Object v) {
-        if (v == null) return null;
-        if (v instanceof Boolean b) return b;
-        String s = String.valueOf(v).toLowerCase();
-        if ("true".equals(s) || "1".equals(s)) return true;
-        if ("false".equals(s) || "0".equals(s)) return false;
-        return null;
     }
 }

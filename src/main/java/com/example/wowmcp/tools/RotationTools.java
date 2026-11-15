@@ -14,7 +14,7 @@ import java.util.List;
 import java.util.Map;
 
 import static com.example.wowmcp.tools.ToolSupport.JSON;
-import static com.example.wowmcp.tools.ToolSupport.asInt;
+import static com.example.wowmcp.util.Values.asInt;
 
 /** MCP-инструменты умений, ротации и профилей: spells, set/get_rotation, set_profile, обучение. */
 @Component

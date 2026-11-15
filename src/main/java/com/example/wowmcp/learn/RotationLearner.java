@@ -18,6 +18,15 @@ import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 
+import static com.example.wowmcp.learn.Stats.median;
+import static com.example.wowmcp.learn.Stats.medianInt;
+import static com.example.wowmcp.learn.Stats.percentile;
+import static com.example.wowmcp.learn.Stats.round2;
+import static com.example.wowmcp.util.Values.asBool;
+import static com.example.wowmcp.util.Values.asDouble;
+import static com.example.wowmcp.util.Values.asInt;
+import static com.example.wowmcp.util.Values.str;
+
 /**
  * Обучение ротации по нажатиям игрока (профили персонажей).
  * Возвращает ротацию в формате fight() или null, если данных недостаточно.
@@ -30,12 +39,19 @@ public class RotationLearner {
 
     private final Database db;
     private final CastHistoryRepository casts;
+    private final LearnPolicy policy;
     private final Map<String, Integer> lastLearnedCount = new ConcurrentHashMap<>();
     private final Map<String, String> lastStatsJson = new ConcurrentHashMap<>();
 
-    public RotationLearner(Database db, CastHistoryRepository casts) {
+    public RotationLearner(Database db, CastHistoryRepository casts, LearnPolicy policy) {
         this.db = db;
         this.casts = casts;
+        this.policy = policy;
+    }
+
+    /** Включено ли автообучение для профиля (см. {@link LearnPolicy}). */
+    public boolean isAutoLearnEnabled(String profile) {
+        return policy.isAutoLearnEnabled(profile);
     }
 
     /** Результат обучения. */
@@ -286,8 +302,9 @@ public class RotationLearner {
      * Обучение ротации v2 по применённым заклинаниям (spell_cast, по nameHash).
      * Если spell_cast для профиля пуст — hasData=false (можно fallback на key_press).
      * Если есть данные, но их недостаточно — hasData=true, result=null (fallback запрещён).
-     * currentRotation — текущая ротация в игре: аварийные правила (maxHpPct) с малым числом
-     * данных (<5 применений) переносятся как есть.
+     * currentRotation — текущая ротация в игре: правила, заданные вручную (maxHpPct, maxPetHpPct,
+     * repeatMs или key, без пометки learned), переносятся как есть и стоят в начале.
+     * Заклинания из {@link LearnPolicy} (автострельба, атака, кормление/лечение питомца) не учатся.
      */
     public SpellLearn learnSpells(String profile, List<Map<String, Object>> currentRotation) {
         final int REQUIRED_IN_COMBAT = 40;
@@ -298,18 +315,19 @@ public class RotationLearner {
         if (rows.isEmpty()) {
             return new SpellLearn(null, false, 0, REQUIRED_IN_COMBAT);
         }
-        List<Map<String, Object>> casts = new ArrayList<>();
+        // Исключённые заклинания (автострельба, атака, кормление и лечение питомца) не учим
+        List<Map<String, Object>> history = new ArrayList<>();
         for (Map<String, Object> r : rows) {
             Integer hash = asInt(r.get("name_hash"));
-            if (hash == null) continue;
-            casts.add(r);
+            if (hash == null || policy.isExcluded(hash)) continue;
+            history.add(r);
         }
-        if (casts.isEmpty()) {
-            return new SpellLearn(null, false, 0, REQUIRED_IN_COMBAT);
+        if (history.isEmpty()) {
+            return new SpellLearn(null, true, 0, REQUIRED_IN_COMBAT);
         }
 
         int inCombatCasts = 0;
-        for (Map<String, Object> r : casts) {
+        for (Map<String, Object> r : history) {
             if (Boolean.TRUE.equals(asBool(r.get("fight")))) inCombatCasts++;
         }
         if (inCombatCasts < REQUIRED_IN_COMBAT) {
@@ -319,7 +337,7 @@ public class RotationLearner {
         }
 
         Map<Integer, List<Map<String, Object>>> byHash = new LinkedHashMap<>();
-        for (Map<String, Object> r : casts) {
+        for (Map<String, Object> r : history) {
             byHash.computeIfAbsent(asInt(r.get("name_hash")), k -> new ArrayList<>()).add(r);
         }
 
@@ -333,7 +351,7 @@ public class RotationLearner {
         }
 
         List<Double> allCombatHp = new ArrayList<>();
-        for (Map<String, Object> r : casts) {
+        for (Map<String, Object> r : history) {
             if (Boolean.TRUE.equals(asBool(r.get("fight")))) {
                 Double hp = asDouble(r.get("hp"));
                 if (hp != null) allCombatHp.add(hp);
@@ -373,7 +391,7 @@ public class RotationLearner {
             for (Map<String, Object> r : cp) {
                 Integer pk = asInt(r.get("prev_spell"));
                 Integer pm = asInt(r.get("prev_spell_ms"));
-                if (pk != null && pm != null && pm <= 3000) {
+                if (pk != null && pm != null && pm <= 3000 && !policy.isExcluded(pk)) {
                     byPrev.computeIfAbsent(pk, k -> new ArrayList<>()).add(pm);
                 }
             }
@@ -436,25 +454,22 @@ public class RotationLearner {
         Map<String, Object> stats = new LinkedHashMap<>();
         Set<Integer> added = new HashSet<>();
 
-        // Сначала переносим аварийные правила из текущей ротации, если данных по ним мало (<5)
+        // Сначала переносим правила, заданные вручную (условия maxHpPct / maxPetHpPct / repeatMs или слот key):
+        // обучение их не затирает. Заклинание такого правила дальше не учим заново.
         if (currentRotation != null) {
             for (Map<String, Object> cur : currentRotation) {
-                if (cur == null) continue;
-                Object spellObj = cur.get("spell");
-                Integer spell = asInt(spellObj);
-                if (spell == null) continue;
-                Object mhp = cur.get("maxHpPct");
-                boolean isEmergencyRule = mhp != null;
-                if (!isEmergencyRule) continue;
-                int count = byHash.containsKey(spell) ? byHash.get(spell).size() : 0;
-                if (count < 5) {
-                    Map<String, Object> preserved = new LinkedHashMap<>(cur);
-                    rotation.add(preserved);
+                if (!LearnPolicy.isManualRule(cur)) continue;
+                rotation.add(new LinkedHashMap<>(cur));
+                Integer spell = asInt(cur.get("spell"));
+                Map<String, Object> hs = new LinkedHashMap<>();
+                hs.put("rule", "сохранено правило из текущей ротации");
+                if (spell != null) {
                     added.add(spell);
-                    Map<String, Object> hs = new LinkedHashMap<>();
-                    hs.put("count", count);
-                    hs.put("rule", "сохранено аварийное правило из текущей ротации (мало данных: " + count + ")");
+                    hs.put("count", byHash.containsKey(spell) ? byHash.get(spell).size() : 0);
                     stats.put(String.valueOf(spell), hs);
+                } else {
+                    hs.put("count", 0);
+                    stats.put("key:" + cur.get("key"), hs);
                 }
             }
         }
@@ -463,6 +478,7 @@ public class RotationLearner {
             if (added.contains(hash)) continue;
             Map<String, Object> entry = new LinkedHashMap<>();
             entry.put("spell", hash);
+            entry.put("learned", true);   // выучено автоматически: при следующем обучении пересчитывается
             List<String> rules = new ArrayList<>();
             if (Boolean.TRUE.equals(emergency.get(hash))) {
                 entry.put("maxHpPct", maxHpPct.get(hash));
@@ -486,11 +502,12 @@ public class RotationLearner {
             stats.put(String.valueOf(hash), hs);
         }
 
-        int samples = casts.size();
+        int samples = history.size();
         String statsJson = null;
         try { statsJson = JSON.writeValueAsString(stats); } catch (Exception ignored) {}
         lastStatsJson.put(profile, statsJson);
-        lastLearnedCount.put(profile, samples);
+        // считаем все строки spell_cast (в т.ч. исключённые): с ними сравнивает EventCollector
+        lastLearnedCount.put(profile, rows.size());
         log.info("Профиль '{}': выучена ротация v2 {} (samples={})", profile, rotation, samples);
         return new SpellLearn(new Result(rotation, stats, samples), true, inCombatCasts, REQUIRED_IN_COMBAT);
     }
@@ -510,66 +527,4 @@ public class RotationLearner {
     }
 
     // ---- helpers ----
-
-    private static String str(Object v) {
-        return v == null ? null : String.valueOf(v).trim();
-    }
-
-    private static Integer asInt(Object v) {
-        if (v == null) return null;
-        if (v instanceof Number n) return n.intValue();
-        try { return Integer.parseInt(String.valueOf(v)); } catch (NumberFormatException e) { return null; }
-    }
-
-    private static Double asDouble(Object v) {
-        if (v == null) return null;
-        if (v instanceof Number n) return n.doubleValue();
-        try { return Double.parseDouble(String.valueOf(v)); } catch (NumberFormatException e) { return null; }
-    }
-
-    private static Boolean asBool(Object v) {
-        if (v == null) return null;
-        if (v instanceof Boolean b) return b;
-        String s = String.valueOf(v).toLowerCase();
-        if ("true".equals(s) || "1".equals(s) || "t".equals(s)) return true;
-        if ("false".equals(s) || "0".equals(s) || "f".equals(s)) return false;
-        return null;
-    }
-
-    private static double median(List<Double> vals) {
-        if (vals.isEmpty()) return 0;
-        List<Double> s = new ArrayList<>(vals);
-        s.sort(Comparator.naturalOrder());
-        int n = s.size();
-        if (n % 2 == 1) return s.get(n / 2);
-        return (s.get(n / 2 - 1) + s.get(n / 2)) / 2.0;
-    }
-
-    private static double medianInt(List<Integer> vals) {
-        if (vals.isEmpty()) return 0;
-        List<Integer> s = new ArrayList<>(vals);
-        s.sort(Comparator.naturalOrder());
-        int n = s.size();
-        if (n % 2 == 1) return s.get(n / 2);
-        return (s.get(n / 2 - 1) + s.get(n / 2)) / 2.0;
-    }
-
-    private static double percentile(List<Double> vals, double p) {
-        if (vals.isEmpty()) return 0;
-        List<Double> s = new ArrayList<>(vals);
-        s.sort(Comparator.naturalOrder());
-        int n = s.size();
-        double idx = p * (n - 1);
-        int lo = (int) Math.floor(idx);
-        int hi = (int) Math.ceil(idx);
-        if (lo < 0) lo = 0;
-        if (hi >= n) hi = n - 1;
-        if (lo == hi) return s.get(lo);
-        double frac = idx - lo;
-        return s.get(lo) * (1 - frac) + s.get(hi) * frac;
-    }
-
-    private static double round2(double v) {
-        return Math.round(v * 100.0) / 100.0;
-    }
 }
