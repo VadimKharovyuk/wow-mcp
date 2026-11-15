@@ -64,16 +64,16 @@ Object.assign(bot, {
     return { ok: false, reason: 'не удалось дойти до торговца', dist: this._vendorDist(vendor) };
   },
 
-  // шаг вперёд на ms мс в сторону торговца. Сохранённая точка — это место, где стоял игрок, а сам NPC
-  // чуть впереди него (по направлению facing). Рядом с точкой направление «на точку» бессмысленно
-  // (dx, dy ≈ 0), поэтому идём туда, куда смотрел игрок при запоминании.
-  async _walkTowardVendor(vendor, ms) {
+  // Маленький шаг вперёд в сторону торговца. Сохранённая точка — место, где стоял игрок; NPC впереди него
+  // по направлению facing. Поэтому идём ВСЕГДА по facing, а не «на точку»: стоит пройти точку — и направление
+  // на неё указывает назад (бот пятился от торговца). Без facing (старые записи) идём на точку, если она дальше 0.08.
+  async _creepForward(vendor, ms) {
     const s = this.state();
-    const dx = vendor.x - s.x, dy = vendor.y - s.y;
-    if (Math.hypot(dx, dy) > 0.08) {
-      await this._faceTo(Math.atan2(-dx, -dy), { tol: 0.2, timeout: 1500 });
-    } else if (typeof vendor.facing === 'number' && isFinite(vendor.facing)) {
+    if (typeof vendor.facing === 'number' && isFinite(vendor.facing)) {
       await this._faceTo(vendor.facing, { tol: 0.2, timeout: 1500 });
+    } else {
+      const dx = vendor.x - s.x, dy = vendor.y - s.y;
+      if (Math.hypot(dx, dy) > 0.08) await this._faceTo(Math.atan2(-dx, -dy), { tol: 0.2, timeout: 1500 });
     }
     this.key('W', true);
     try {
@@ -168,30 +168,33 @@ Object.assign(bot, {
                dist: this._vendorDist(vendor), ...this.state() };
     }
 
-    // 4) скан всего экрана → правый клик; не нашли — поворот на 90° и повтор (4 раза)
-    let opened = false;
+    // 4) найти торговца на экране → правый клик. Не открылось — маленький шаг вперёд по facing и снова
+    //    (до 8 шагов ≈ 10 м): окно открывается только вплотную. Не видно на экране — поворот на 90° (до 4 раз).
+    let opened = false, creeps = 0;
     for (let attempt = 0; attempt < 4 && !opened; attempt++) {
       if (!this.state().target && !(await targetVendor())) {
         return { result: 'торговец не найден по имени', vendor: vendor.name,
                  dist: this._vendorDist(vendor), ...this.state() };
       }
-      const f = await this._findVendorOnScreen(9000);
-      if (f.found) {
-        // окно закроет Lua после продажи и ремонта (только окно, открытое ботом)
-        await chat('/run BOTSELL=1');
-        // окно открывается только вплотную: нет за 2 с — шаг вперёд и клик снова (до 3 раз)
-        for (let click = 0; click < 3 && !opened; click++) {
-          if (click > 0) await this._walkTowardVendor(vendor, 300 + 150 * click);
-          this.mouse(f.point[0], f.point[1], 'mousedown', 2);
-          await sleep(60);
-          this.mouse(f.point[0], f.point[1], 'mouseup', 2);
-          // wait for merchant or gossip to turn into merchant
-          const t0 = Date.now();
-          while (Date.now() - t0 < 2000) {
-            await sleep(200);
-            if (this.bags().merchantOpen === 1) { opened = true; break; }
-            if (this.state().fight) break;
-          }
+      let flagSet = false;
+      for (let k = 0; k < 8 && !opened; k++) {
+        if (k > 0) { await this._creepForward(vendor, 220); creeps++; }
+        const f = await this._findVendorOnScreen(k === 0 ? 9000 : 2500);   // после шага экранная точка сместилась
+        if (this.state().fight) break;
+        if (!f.found) { if (k === 0) break; continue; }
+        if (!flagSet) {
+          // окно закроет Lua после продажи и ремонта (только окно, открытое ботом)
+          await chat('/run BOTSELL=1');
+          flagSet = true;
+        }
+        this.mouse(f.point[0], f.point[1], 'mousedown', 2);
+        await sleep(60);
+        this.mouse(f.point[0], f.point[1], 'mouseup', 2);
+        const t0 = Date.now();
+        while (Date.now() - t0 < 1300) {                // ждём торговца или беседу, которая станет окном
+          await sleep(200);
+          if (this.bags().merchantOpen === 1) { opened = true; break; }
+          if (this.state().fight) break;
         }
       }
       if (this.state().fight) {
@@ -207,7 +210,7 @@ Object.assign(bot, {
       // не оставляем флаг: иначе Lua закроет окно, открытое потом игроком
       try { await chat('/run BOTSELL=nil'); } catch (e) { /* чат недоступен — не критично */ }
       // dist — чтобы было видно, дошёл ли бот вплотную до сохранённой точки
-      return { result: 'окно торговца не открылось', dist: this._vendorDist(vendor), ...this.state() };
+      return { result: 'окно торговца не открылось', dist: this._vendorDist(vendor), creeps, ...this.state() };
     }
 
     // 5) wait until sold and closed
