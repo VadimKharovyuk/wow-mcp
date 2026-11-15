@@ -1,6 +1,6 @@
 # План: OPENCODE_TASK_6_COMBAT.md
 
-Источник — `OPENCODE_TASK_6_COMBAT.md` в корне (в `docs/tasks/` лежит более старая копия без пунктов 16–17).
+Источник — `docs/tasks/done/OPENCODE_TASK_6_COMBAT.md` (версия с пунктами 16–17).
 Проверка: `./mvnw -q package`, `node --check` для JS. Lua меняется — версия обновится сама (хеш файлов).
 
 ## Что уже закрыто
