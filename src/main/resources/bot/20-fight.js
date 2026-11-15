@@ -111,6 +111,7 @@ Object.assign(bot, {
     while (this.running) {
       const s = this.state(), hpPct = s.hp / s.hpMax;
       if (s.hp > 0) this.lastAlive = { hpPct: +hpPct.toFixed(2), manaPct: s.manaPct, pet: s.pet };   // для отчёта о смерти
+      if (s.hp === 0 || this.dead()) { this.release(); return { result: 'персонаж погиб', ...s }; }   // мёртвый не жмёт клавиши
       if (!s.fight && (!s.target || s.targetHp === 0)) return { result: 'бой окончен', ...s };
       if (hpPct < fleeAt) { this.release(); return { result: 'мало HP — нужен выбор', ...s }; }
       if (Date.now() - t0 > timeout) { this.release(); return { result: 'бой слишком долгий', ...s }; }

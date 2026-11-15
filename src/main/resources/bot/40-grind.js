@@ -192,8 +192,10 @@ Object.assign(bot, {
   // бой (+ лут, если grindCfg.loot); возвращает null если всё ок, иначе причину для выхода из гринда
   async fightAndLoot(st) {
     if (!this.grinding) return 'остановлен вручную';   // fight() сам включает running — после stop() не начинать бой
-    const f = await this.fight();
-    if (this.dead() || f.hp === 0) return null;   // погибли: гринд-цикл увидит смерть на следующем шаге
+    // fleeAt: 0 — в автономной охоте не сдаёмся при HP < 20%: именно тогда нужны аварийные правила ротации
+    // (лечение, ловушка), а остановка боя с «нужен выбор» оставляла персонажа без управления и без воскрешения
+    const f = await this.fight({ fleeAt: 0 });
+    if (this.dead() || f.hp === 0 || f.result === 'персонаж погиб') return null;   // погибли: гринд-цикл увидит смерть на следующем шаге
     if (!this.grinding) return 'остановлен вручную';
     if (f.result !== 'бой окончен') return 'бой: ' + f.result;
     st.kills++;

@@ -101,6 +101,20 @@ Object.assign(bot, {
         x: s.x, y: s.y, hpBefore: la.hpPct, manaBefore: la.manaPct, at: now });
     }
     this.wasDead = dead;
+    // Смерть вне задачи (бой закончился неудачей, задача уже завершилась): если бот недавно работал (3 мин),
+    // сам воскрешаемся через 8 с. Смерть при ручной игре (бот давно не действовал) не трогаем.
+    if (dead) {
+      this.deadSince = this.deadSince || now;
+      if (this.autoReviveIdle !== false && now - this.deadSince > 8000 && now - (this.lastReviveTry || 0) > 30000
+          && !(this.job && this.job.status === 'running') && !this.jobBusy && this.botActedWithin(180000)) {
+        this.lastReviveTry = now;
+        this.warnings.push('смерть вне задачи — запускаю воскрешение');
+        if (this.warnings.length > 20) this.warnings.shift();
+        this.start('revive');
+      }
+    } else {
+      this.deadSince = 0;
+    }
     // снимок опыта и денег: при изменении, не чаще раза в 5 с (опыт в час, доход в час)
     const money = this.bags().money || 0, snap = this.lastStat;
     if (!snap || ((snap.xp !== di.xp || snap.money !== money || snap.level !== s.pLvl) && now - snap.at >= 5000)) {
