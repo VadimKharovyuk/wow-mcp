@@ -1,6 +1,7 @@
 package com.example.wowmcp.tools;
 
 import com.example.wowmcp.db.Database;
+import com.example.wowmcp.db.HuntRepository;
 import com.example.wowmcp.db.KillRepository;
 import com.example.wowmcp.db.VendorRepository;
 import com.example.wowmcp.game.GameBridge;
@@ -26,12 +27,15 @@ public class GrindTools {
     private final Database db;
     private final VendorRepository vendors;
     private final KillRepository kills;
+    private final HuntRepository hunts;
 
-    public GrindTools(GameBridge bridge, Database db, VendorRepository vendors, KillRepository kills) {
+    public GrindTools(GameBridge bridge, Database db, VendorRepository vendors, KillRepository kills,
+                      HuntRepository hunts) {
         this.bridge = bridge;
         this.db = db;
         this.vendors = vendors;
         this.kills = kills;
+        this.hunts = hunts;
     }
 
     @Tool(name = "grind", description = """
@@ -51,7 +55,7 @@ public class GrindTools {
             autoRevive — после смерти отпустить дух, добежать до трупа, воскреснуть и продолжить (по умолчанию true);
             3 смерти за 10 минут останавливают гринд (статус stopped).""")
     public String grind(
-            @ToolParam(required = false, description = "Радиус охоты вокруг старта, 0.5..10 (по умолчанию 2.5)")
+            @ToolParam(required = false, description = "Радиус охоты вокруг старта в ЕДИНИЦАХ КАРТЫ (не метры), 0.5..10 (по умолчанию 2.5); 1 ед. ≈ 50 м в небольшой зоне")
             Double radius,
             @ToolParam(required = false, description = "Лимит убийств, 0 = без лимита (по умолчанию 10)")
             Integer maxKills,
@@ -98,6 +102,15 @@ public class GrindTools {
             if (v != null) {
                 vendorOpt = vendorArg(v);
                 opts.put("vendor", vendorOpt);
+            }
+            // имена мобов для /target имя: Tab не видит нейтральных (жёлтых) мобов
+            Integer zoneId = hunts.zoneId(state.zone());
+            if (zoneId != null) {
+                double r = patrol ? (maxDistance == null ? 15.0 : maxDistance) : (radius == null ? 2.5 : radius);
+                List<String> names = hunts.namesAround(zoneId, state.pLvl(), state.x(), state.y(), r);
+                if (!names.isEmpty()) {
+                    opts.put("names", names);
+                }
             }
             if (useSpots == null || useSpots || patrol) {
                 int minLvl = state.pLvl() + (minLvlDiff == null ? DEFAULT_MIN_LVL_DIFF : minLvlDiff);

@@ -30,6 +30,7 @@ public class EventCollector {
     private final CastHistoryRepository casts;
     private final KillRepository kills;
     private final SpellIdResolver spellIds;
+    private final HuntRepository hunts;
     private final PathRepository paths;
     private final ProfileRepository profiles;
     private final RotationLearner learner;
@@ -43,12 +44,13 @@ public class EventCollector {
     private final java.util.concurrent.atomic.AtomicInteger statDrains = new java.util.concurrent.atomic.AtomicInteger();
     private final java.util.concurrent.atomic.AtomicInteger statInsertErrors = new java.util.concurrent.atomic.AtomicInteger();
 
-    public EventCollector(GameBridge bridge, Database db, CastHistoryRepository casts, KillRepository kills, SpellIdResolver spellIds, PathRepository paths, ProfileRepository profiles, RotationLearner learner) {
+    public EventCollector(GameBridge bridge, Database db, CastHistoryRepository casts, KillRepository kills, SpellIdResolver spellIds, HuntRepository hunts, PathRepository paths, ProfileRepository profiles, RotationLearner learner) {
         this.bridge = bridge;
         this.db = db;
         this.casts = casts;
         this.kills = kills;
         this.spellIds = spellIds;
+        this.hunts = hunts;
         this.paths = paths;
         this.profiles = profiles;
         this.learner = learner;
@@ -134,6 +136,16 @@ public class EventCollector {
                     long at = asLong(ev.get("at"));
                     kills.insertMobKill(zone == null ? 0 : zone, x == null ? 0 : x, y == null ? 0 : y,
                             mobLevel, playerLevel, source, at == 0 ? System.currentTimeMillis() : at);
+                }
+            } else if ("hunt".equals(type)) {
+                if (db.isEnabled()) {
+                    Integer zoneId = asInt(ev.get("zoneId"));
+                    Double cx = asDouble(ev.get("cx")), cy = asDouble(ev.get("cy"));
+                    if (zoneId != null && cx != null && cy != null) {
+                        Integer kills = asInt(ev.get("kills")), emptyMin = asInt(ev.get("emptyMinutes"));
+                        hunts.recordVisit(zoneId, cx, cy, Boolean.TRUE.equals(asBool(ev.get("found"))),
+                                kills == null ? 0 : kills, emptyMin == null ? 0 : emptyMin, str(ev.get("note")));
+                    }
                 }
             } else if ("path".equals(type)) {
                 pathN++;

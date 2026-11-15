@@ -153,6 +153,17 @@ window.bot = {
   // игровое время (GetTime, B[9]) без округления — по нему видно, что игра обработала кадр
   gameTime() { return this.mem()[this.addr + 8 * this.stride]; },
 
+  // подождать n кадров игры (B[9] сдвинулся n раз) — после /target, клика и т.п.
+  async waitFrames(n = 2, maxWait = 700) {
+    let last = this.gameTime(), ticks = 0;
+    const dl = Date.now() + maxWait;
+    while (Date.now() < dl && ticks < n) {
+      await sleep(40);
+      const t = this.gameTime();
+      if (t !== last) { ticks++; last = t; }
+    }
+  },
+
   // Tab и ожидание, пока таблица B обновится (≥ 2 кадра игры): иначе читаем ещё старую цель.
   async tabTarget(maxWait = 700) {
     let last = this.gameTime(), ticks = 0;
@@ -292,6 +303,7 @@ window.bot = {
   release() { this.running = false; for (const k in this.held) this.key(k, false); },
   stop() {
     this.stopSeq = (this.stopSeq || 0) + 1;   // для долгих задач с ожиданиями (revive)
+    this.hunting = false;
     this.grinding = false;
     // Задача не должна остаться в статусе 'running': по нему 60-track.js решает,
     // что действие сделал бот, и тогда ручные нажатия игрока не пишутся в БД.
@@ -330,6 +342,6 @@ window.bot = {
   },
   report() {
     const s = this.state();
-    return JSON.stringify({ job: this.job, hpPct: Math.round(s.hp / s.hpMax * 100), ...s, grind: this.grindStats || null, route: this.routeProgress || null });
+    return JSON.stringify({ job: this.job, hpPct: Math.round(s.hp / s.hpMax * 100), ...s, grind: this.grindStats || null, route: this.routeProgress || null, hunt: this.huntStats || null });
   }
 };

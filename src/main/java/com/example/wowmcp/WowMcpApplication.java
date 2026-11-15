@@ -2,6 +2,7 @@ package com.example.wowmcp;
 
 import com.example.wowmcp.tools.BotActionTools;
 import com.example.wowmcp.tools.GrindTools;
+import com.example.wowmcp.tools.HuntTools;
 import com.example.wowmcp.tools.InventoryTools;
 import com.example.wowmcp.tools.PlaceTools;
 import com.example.wowmcp.tools.RecordingTools;
@@ -27,9 +28,9 @@ public class WowMcpApplication {
     @Bean
     public ToolCallbackProvider wowToolCallbacks(BotActionTools actions, GrindTools grind,
                                                  RecordingTools recording, RotationTools rotation,
-                                                 InventoryTools inventory, PlaceTools places) {
+                                                 InventoryTools inventory, PlaceTools places, HuntTools hunt) {
         return MethodToolCallbackProvider.builder()
-                .toolObjects(actions, grind, recording, rotation, inventory, places)
+                .toolObjects(actions, grind, recording, rotation, inventory, places, hunt)
                 .build();
     }
 

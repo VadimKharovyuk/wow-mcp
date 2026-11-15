@@ -123,5 +123,20 @@ final class SchemaInitializer {
                   session_id varchar(40) NOT NULL
                 )""");
         jdbc.execute("ALTER TABLE route ADD COLUMN IF NOT EXISTS created_at timestamptz DEFAULT now()");
+        // результаты реальных посещений кластеров охоты (задание 9). mob_spawn, zone_map и mob_cluster
+        // импортирует игрок; здесь только своя статистика. cx/cy — numeric(8,2): view может отдавать real или int.
+        jdbc.execute("""
+                CREATE TABLE IF NOT EXISTS hunt_cluster_stat (
+                  zone_id     int          NOT NULL,
+                  cx          numeric(8,2) NOT NULL,
+                  cy          numeric(8,2) NOT NULL,
+                  visits      int          NOT NULL DEFAULT 0,
+                  found       int          NOT NULL DEFAULT 0,
+                  kills       int          NOT NULL DEFAULT 0,
+                  last_visit  timestamptz,
+                  empty_until timestamptz,
+                  note        text,
+                  PRIMARY KEY (zone_id, cx, cy)
+                )""");
     }
 }
