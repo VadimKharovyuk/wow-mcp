@@ -18,6 +18,9 @@ Object.assign(bot, {
                 // Замораживающая ловушка (аварийная): HP ниже trapBelowHpPct, моб вплотную и бьёт охотника — поставить
                 // и пятиться. Пока ловушки нет в панели умений (не выучена), правило молча пропускается.
                 trapSpell: 197174967 /* Замораживающая ловушка */, trapBelowHpPct: 0.7,
+                // Притвориться мёртвым (с 30 ур.): HP ниже feignBelowHpPct — моб теряет цель, бой прекращается.
+                // Пока умения нет в панели, правило молча пропускается.
+                feignSpell: 194715437 /* Притвориться мёртвым */, feignBelowHpPct: 0.15,
                 shootSpell: 1278643508 /* Чародейский выстрел */,
                 meleeSpell: 1704697426 /* Удар ящера */, beastsOnly: true,
                 // Закреплённая ротация: используется вместо выученной (автообучение пока учит
@@ -94,6 +97,20 @@ Object.assign(bot, {
     return false;
   },
 
+  // После «Притвориться мёртвым»: ждём, пока бой кончится (мобы потеряли цель) — не дольше 25 с, потом встаём
+  // коротким шагом назад (движение снимает притворство).
+  async waitFeignOver(maxMs = 25000) {
+    const t0 = Date.now();
+    await sleep(1200);                                        // притворство применяется не мгновенно
+    while (this.running && Date.now() - t0 < maxMs) {
+      const s = this.state();
+      if (s.hp === 0 || this.dead()) return;                  // всё-таки погиб
+      if (!s.fight) break;
+      await sleep(500);
+    }
+    if (this.running) { this.key('S', true); await sleep(250); this.key('S', false); }
+  },
+
   // питомцу нужно лечение: есть, жив, HP ниже порога и лечение на нём ещё не висит (HoT 15 с)
   petNeedsHeal(below) {
     const p = this.pet();
@@ -103,6 +120,7 @@ Object.assign(bot, {
   async fight({ fleeAt = 0.2, timeout = 90000 } = {}) {
     this.running = true;
     const t0 = Date.now(), fightStart = t0;
+    let feignAt = 0;
     let lastPress = 0, handledErr = 0, turns = 0, retreats = 0, lastRetreat = 0, deadSince = 0;
     let noAttackSince = 0, hpAtNoAttack = 0, lastSwitch = 0, trapAt = 0;
     const hpHist = [];
@@ -172,6 +190,22 @@ Object.assign(bot, {
         const inDeadZone = cc && cc.ranged && this.spellInRange(cc.meleeSpell) === 1;
         if (s.err === 2 && !inDeadZone && now - this.lastHealCastAt() > HEAL_CAST_LOCK_MS) {
           await this.hold('W', 500); continue;                                           // подойти ближе
+        }
+      }
+
+      // Притвориться мёртвым — последнее средство при HP < 15%: самый приоритетный ход (раньше ловушки и атаки).
+      if (cc && cc.feignSpell && s.fight && hpPct < (cc.feignBelowHpPct || 0.15) && now - feignAt > 20000
+          && (this.failedUntil[cc.feignSpell] || 0) <= now) {
+        const rec = spellRec(cc.feignSpell);
+        if (rec && rec.ready === 1) {
+          feignAt = now;
+          if (await this.pressSpell(cc.feignSpell)) {
+            this.warnings.push('притворился мёртвым: HP ' + Math.round(hpPct * 100) + '%');
+            if (this.warnings.length > 20) this.warnings.shift();
+            await this.waitFeignOver();
+            this.release();
+            return { result: 'притворился мёртвым', ...this.state() };   // дальше гринд отдыхает (HP низкое)
+          }
         }
       }
 
