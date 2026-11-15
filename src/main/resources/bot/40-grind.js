@@ -59,8 +59,7 @@ Object.assign(bot, {
       // и убегал к старому месту мимо них.
       for (let turn = 0; turn < 3 && this.grinding; turn++) {
         for (let i = 0; i < 3 && this.grinding; i++) {
-          await this.tap('TAB'); await sleep(250);
-          const s = this.state();
+          const s = await this.tabTarget();
           { const why = this.targetProblem(s); if (!why) return s; this.noteReject(why); }
         }
         if (turn < 2) await this.turnTo(this.state().facing + 2.1, 2500, () => !this.grinding);   // ~120°
@@ -71,8 +70,7 @@ Object.assign(bot, {
     }
     for (let turn = 0; turn < 2 && this.grinding; turn++) {
       for (let i = 0; i < 3 && this.grinding; i++) {
-        await this.tap('TAB'); await sleep(250);
-        const s = this.state();
+        const s = await this.tabTarget();
         { const why = this.targetProblem(s); if (!why) return s; this.noteReject(why); }
       }
       await this.hold('A', 330); await sleep(150);

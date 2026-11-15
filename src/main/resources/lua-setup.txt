@@ -17,3 +17,5 @@
 /run function PQ() local p="pet" local e=UnitExists(p) Q[3]=GetTime() Q[4]=e and 1 or 0 Q[5]=e and UnitHealth(p)/math.max(1,UnitHealthMax(p)) or 0 Q[6]=(e and UnitIsDead(p)) and 1 or 0 Q[7]=(e and UnitBuff(p,GetSpellInfo(136))) and 1 or 0 end
 /run function PR() local t="target" Q[8]=UnitIsUnit(t.."target","player") and 1 or 0 Q[9]=UnitIsUnit(t.."target","pet") and 1 or 0 Q[10]=(UnitExists(t) and UnitExists("pet") and UnitCreatureType(t)==UnitCreatureType("pet")) and 1 or 0 end
 /run local w=W W=function() w() PQ() PR() end
+/run function PC() Q[11]=(UnitCastingInfo("player") or UnitChannelInfo("player")) and 1 or 0 Q[12]=UnitIsDeadOrGhost("player") and 1 or 0 end
+/run local w=W W=function() w() PC() end

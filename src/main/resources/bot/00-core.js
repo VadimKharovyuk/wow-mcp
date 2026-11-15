@@ -123,6 +123,33 @@ window.bot = {
              ttPlayer: g(7) === 1, ttPet: g(8) === 1, tBeast: g(9) === 1 };
   },
 
+  // Q[11]: идёт каст или канал игрока (нельзя жать другие клавиши, нельзя двигаться).
+  // Q[12]: игрок мёртв или призрак (UnitIsDeadOrGhost). Старый Lua без них: false.
+  casting() {
+    if (this.qaddr == null) return false;
+    return this.mem()[this.qaddr + 10 * this.qstride] === 1;
+  },
+  dead() {
+    if (this.qaddr == null) return false;
+    return this.mem()[this.qaddr + 11 * this.qstride] === 1;
+  },
+
+  // игровое время (GetTime, B[9]) без округления — по нему видно, что игра обработала кадр
+  gameTime() { return this.mem()[this.addr + 8 * this.stride]; },
+
+  // Tab и ожидание, пока таблица B обновится (≥ 2 кадра игры): иначе читаем ещё старую цель.
+  async tabTarget(maxWait = 700) {
+    let last = this.gameTime(), ticks = 0;
+    await this.tap('TAB');
+    const dl = Date.now() + maxWait;
+    while (Date.now() < dl && ticks < 2) {
+      await sleep(40);
+      const t = this.gameTime();
+      if (t !== last) { ticks++; last = t; }
+    }
+    return this.state();
+  },
+
   state() {
     const H = this.mem(), g = n => H[this.addr + n * this.stride];
     return {

@@ -86,7 +86,7 @@ Object.assign(bot, {
       if (hpPct < fleeAt) { this.release(); return { result: 'мало HP — нужен выбор', ...s }; }
       if (Date.now() - t0 > timeout) { this.release(); return { result: 'бой слишком долгий', ...s }; }
 
-      if (!s.target || !s.enemy || s.targetHp === 0) { await this.tap('TAB'); await sleep(300); continue; }
+      if (!s.target || !s.enemy || s.targetHp === 0) { await this.tabTarget(); continue; }
 
       const isReadyKey = k => (s.ready >> (+k - 1)) & 1;
       const spellRec = h => (this.spells() || []).find(r => r.nameHash === h);
