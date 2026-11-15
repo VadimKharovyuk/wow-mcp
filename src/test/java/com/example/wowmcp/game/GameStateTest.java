@@ -62,4 +62,13 @@ class GameStateTest {
         assertThat(old.dead()).isFalse();
         assertThat(old.ghost()).isFalse();
     }
+
+    @Test
+    void parsesPetAndAmmo() {
+        GameState state = GameState.parse("{\"hpPct\":90,\"petExists\":true,\"petHpPct\":0.45,\"petDead\":false,\"ammo\":187}");
+        assertThat(state.petExists()).isTrue();
+        assertThat(state.petHpPct()).isEqualTo(0.45);
+        assertThat(state.petDead()).isFalse();
+        assertThat(state.ammo()).isEqualTo(187);
+    }
 }

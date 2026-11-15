@@ -40,7 +40,11 @@ public record GameState(
         int zone,
         int pLvl,
         boolean dead,
-        boolean ghost) {
+        boolean ghost,
+        boolean petExists,
+        double petHpPct,
+        boolean petDead,
+        double ammo) {
 
     /**
      * Текущая задача бота. У завершённой задачи {@code result} содержит итог,

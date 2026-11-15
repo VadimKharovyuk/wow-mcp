@@ -124,7 +124,7 @@ window.bot = {
     const H = this.mem(), g = n => H[this.daddr + n * this.dstride];
     return { dead: g(3) === 1, ghost: g(4) === 1,
              corpseX: +(g(5) * 100).toFixed(2), corpseY: +(g(6) * 100).toFixed(2),
-             recoveryDelay: g(7), zone: g(8) };
+             recoveryDelay: g(7), zone: g(8), ammo: g(9) };
   },
 
   // Q-таблица: питомец. null — таблица не найдена (старый Lua).
@@ -168,6 +168,7 @@ window.bot = {
 
   state() {
     const H = this.mem(), g = n => H[this.addr + n * this.stride];
+    const pet = this.pet(), di = this.deathInfo();
     return {
       x: +(g(2) * 100).toFixed(2), y: +(g(3) * 100).toFixed(2), facing: +g(4).toFixed(2),
       hp: g(5), hpMax: g(6), fight: g(7) === 1, time: +g(8).toFixed(1),
@@ -178,8 +179,10 @@ window.bot = {
       targetHpMax: g(26), targetHpPct: g(26) > 0 ? +(g(10) / g(26)).toFixed(2) : 0,
       useCount: g(27), useSlot: g(28),
       luaVer: g(29),
-      pet: this.pet(),
-      dead: (this.deathInfo() || {}).dead === true, ghost: (this.deathInfo() || {}).ghost === true
+      pet,
+      petExists: !!pet && pet.exists, petHpPct: pet ? pet.hpPct : 0, petDead: !!pet && pet.exists && pet.dead,
+      ammo: di ? di.ammo : 0,
+      dead: !!di && di.dead, ghost: !!di && di.ghost
     };
   },
 

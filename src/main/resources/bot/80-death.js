@@ -84,6 +84,9 @@ Object.assign(bot, {
 
     // 7) после воскрешения ~50% HP/маны — отдохнуть
     const rest = await this.rest({ manaBelow: this.grindCfg ? this.grindCfg.manaBelow : 0.3 });
+    // стрелок: питомец после смерти обычно пропадает — вызвать снова
+    const cc = this.combatCfg && this.combatCfg();
+    if (cc && cc.petCallKey && !aborted()) await this.ensurePet(cc);
     return { result: 'воскрешён', deathPos, seconds, distance, rest: rest.result, ...this.state() };
   },
 });

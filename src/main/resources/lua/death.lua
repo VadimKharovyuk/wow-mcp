@@ -1,6 +1,6 @@
 -- death.lua — таблица D (метки 777007.5 / 777008.5): смерть, призрак, труп.
 -- D[3] время, D[4] мёртв (труп, дух не отпущен), D[5] призрак, D[6]/D[7] координаты трупа (доли 0..1),
--- D[8] задержка воскрешения (с), D[9] зона (континент*100+зона), D[10] запас.
+-- D[8] задержка воскрешения (с), D[9] зона (континент*100+зона), D[10] боеприпасы (GetInventoryItemCount слота 0; 0 — нет/не стрелок).
 D = {777007.5, 777008.5, 0, 0, 0, 0, 0, 0, 0, 0}
 
 local acc = 0
@@ -13,6 +13,7 @@ frame:SetScript("OnUpdate", function(self, elapsed)
     acc = 0
     local ghost = UnitIsGhost("player") and 1 or 0
     local dead = (UnitIsDead("player") and ghost == 0) and 1 or 0
+    D[10] = GetInventoryItemCount("player", 0) or 0
     D[4] = dead
     D[5] = ghost
     if dead == 1 or ghost == 1 then

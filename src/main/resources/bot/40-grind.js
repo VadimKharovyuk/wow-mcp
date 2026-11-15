@@ -95,6 +95,21 @@ Object.assign(bot, {
     return false;
   },
 
+  // стрелку нужен питомец: нет — вызвать (клавиша petCallKey, каст ~5 с); мёртв — 'dead' (гринд встанет на паузу).
+  // 'ok' — питомец есть или данных нет (старый Lua / не стрелок); 'none' — вызвать не удалось.
+  async ensurePet(cc) {
+    const p = this.pet();
+    if (!p || !cc || !cc.petCallKey) return 'ok';
+    if (p.exists && p.dead) return 'dead';
+    if (p.exists || this.state().fight) return 'ok';
+    await this.tap(cc.petCallKey);
+    await sleep(500);
+    await this.waitFor(() => !this.casting(), 8000, 250, () => !this.grinding);
+    await sleep(500);
+    const q = this.pet();
+    return q && q.exists ? 'ok' : 'none';
+  },
+
   // питомцу пора на лечение: есть правило лечения питомца, питомец жив, HP низкое, лечение не висит.
   // Не чаще раза в 90 с: если лечение не удаётся, гринд не должен вечно сидеть в отдыхе.
   petNeedsRest(cfg) {
@@ -106,6 +121,18 @@ Object.assign(bot, {
 
   // подойти, пока умение агро не станет доступно (цель в его радиусе)
   async approach(maxMs = 6000) {
+    // стрелок: идти, пока цель не достаётся выстрелом, и сразу остановиться (вплотную не подбегать)
+    const cc = this.combatCfg && this.combatCfg();
+    if (cc && cc.ranged && this.spellInRange(cc.shootSpell) !== -1) {
+      const t1 = Date.now();
+      this.key('W', true);
+      while (this.grinding && Date.now() - t1 < maxMs) {
+        if (this.state().fight || this.spellInRange(cc.shootSpell) === 1) break;
+        await sleep(100);
+      }
+      this.key('W', false);
+      return this.state().fight || this.spellInRange(cc.shootSpell) === 1;
+    }
     const isReady = k => (this.state().ready >> (+k - 1)) & 1;
     const t0 = Date.now();
     this.key('W', true);
@@ -284,6 +311,26 @@ Object.assign(bot, {
         await this.rest({ manaBelow: cfg.manaBelow, healKey: cfg.healKey, healSpell: cfg.healSpell, drinkKey: cfg.drinkKey });
         st.rests++; continue;
       }
+      // стрелок: боеприпасы и питомец (пауза, если питомец мёртв)
+      if (cc0 && cc0.ranged) {
+        const ammo = (this.deathInfo() || {}).ammo;
+        if (ammo === 0) return out('кончились боеприпасы');
+        if (ammo > 0 && ammo < (cc0.minAmmo || 200) && !st.ammoWarned) {
+          st.ammoWarned = true;
+          this.warnings.push('боеприпасов мало: ' + ammo);
+        }
+        const pr = await this.ensurePet(cc0);
+        if (pr === 'dead') {
+          st.laps = this.patrolLaps || 0; this.stop();
+          return { result: 'питомец мёртв', status: 'paused', stats: st, ...this.state() };
+        }
+        if (pr === 'none') {
+          if ((st.petCallFails = (st.petCallFails || 0) + 1) >= 3) return out('не удалось вызвать питомца');
+          continue;
+        }
+        st.petCallFails = 0;
+      }
+
       // ушли далеко — назад к центру: в radius это 1.5 радиуса охоты, в patrol — maxDistance
       const farLimit = mode === 'patrol' ? cfg.maxDistance : cfg.radius * 1.5;
       if (Math.hypot(s.x - anchor.x, s.y - anchor.y) > farLimit) {
