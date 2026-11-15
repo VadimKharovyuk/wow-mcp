@@ -17,7 +17,7 @@ final class RotationParser {
 
     /**
      * Валидирует и нормализует ротацию: key '1'..'9' или spell (nameHash), необязательные
-     * maxHpPct 0..1, outOfCombatOnly и waitAfter. В страницу передаются уже проверенные
+     * maxHpPct / maxPetHpPct 0..1, repeatMs, outOfCombatOnly и waitAfter. В страницу передаются уже проверенные
      * значения, без склейки JS-строк.
      */
     static List<Map<String, Object>> parse(String rotationJson) {
@@ -83,6 +83,29 @@ final class RotationParser {
                                     + maxHpPctValue);
                 }
                 entry.put("maxHpPct", threshold);
+            }
+
+            Object maxPetHpPctValue = item.get("maxPetHpPct");
+            if (maxPetHpPctValue != null) {
+                if (!(maxPetHpPctValue instanceof Number number)
+                        || Double.isNaN(number.doubleValue()) || number.doubleValue() < 0 || number.doubleValue() > 1) {
+                    throw new IllegalArgumentException(
+                            "Элемент #" + position + ": maxPetHpPct должен быть числом от 0 до 1, получено: "
+                                    + maxPetHpPctValue);
+                }
+                entry.put("maxPetHpPct", number.doubleValue());
+            }
+
+            Object repeatMsValue = item.get("repeatMs");
+            if (repeatMsValue != null) {
+                if (!(repeatMsValue instanceof Number number) || !Double.isFinite(number.doubleValue())
+                        || number.doubleValue() < 0 || number.doubleValue() > 600_000
+                        || number.doubleValue() != Math.rint(number.doubleValue())) {
+                    throw new IllegalArgumentException(
+                            "Элемент #" + position + ": repeatMs должен быть целым числом от 0 до 600000, получено: "
+                                    + repeatMsValue);
+                }
+                entry.put("repeatMs", number.intValue());
             }
 
             Object outOfCombatValue = item.get("outOfCombatOnly");

@@ -29,6 +29,7 @@ public class EventCollector {
     private final Database db;
     private final CastHistoryRepository casts;
     private final KillRepository kills;
+    private final SpellIdResolver spellIds;
     private final PathRepository paths;
     private final ProfileRepository profiles;
     private final RotationLearner learner;
@@ -42,11 +43,12 @@ public class EventCollector {
     private final java.util.concurrent.atomic.AtomicInteger statDrains = new java.util.concurrent.atomic.AtomicInteger();
     private final java.util.concurrent.atomic.AtomicInteger statInsertErrors = new java.util.concurrent.atomic.AtomicInteger();
 
-    public EventCollector(GameBridge bridge, Database db, CastHistoryRepository casts, KillRepository kills, PathRepository paths, ProfileRepository profiles, RotationLearner learner) {
+    public EventCollector(GameBridge bridge, Database db, CastHistoryRepository casts, KillRepository kills, SpellIdResolver spellIds, PathRepository paths, ProfileRepository profiles, RotationLearner learner) {
         this.bridge = bridge;
         this.db = db;
         this.casts = casts;
         this.kills = kills;
+        this.spellIds = spellIds;
         this.paths = paths;
         this.profiles = profiles;
         this.learner = learner;
@@ -92,6 +94,7 @@ public class EventCollector {
                     lastProfile = profile;
                     Integer nameHash = asInt(ev.get("spellId")); // JS кладёт spellId = nameHash
                     Integer spellId = asInt(ev.get("nameHash"));  // запасной вариант, если пришёл отдельно
+                    if (spellId == null) spellId = spellIds.resolve(nameHash);   // spellId по nameHash из bot.spells()
                     Double hp = asDouble(ev.get("hp"));
                     Double mana = asDouble(ev.get("mana"));
                     Boolean fight = asBool(ev.get("fight"));

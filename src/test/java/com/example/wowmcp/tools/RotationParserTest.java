@@ -100,4 +100,24 @@ class RotationParserTest {
         assertThatThrownBy(() -> RotationParser.parse(null))
                 .isInstanceOf(IllegalArgumentException.class);
     }
+
+    @Test
+    void acceptsPetHealAndRepeatRules() {
+        List<Map<String, Object>> rotation = RotationParser.parse(
+                "[{\"spell\":1635767960,\"maxPetHpPct\":0.5},{\"spell\":1554409780,\"repeatMs\":15000},{\"spell\":1278643508}]");
+
+        assertThat(rotation.get(0)).containsEntry("spell", 1635767960).containsEntry("maxPetHpPct", 0.5);
+        assertThat(rotation.get(1)).containsEntry("repeatMs", 15000);   // Integer, а не Long/Double
+        assertThat(rotation.get(2)).doesNotContainKeys("maxPetHpPct", "repeatMs");
+    }
+
+    @Test
+    void rejectsBadPetHpAndRepeat() {
+        assertThatThrownBy(() -> RotationParser.parse("[{\"spell\":1,\"maxPetHpPct\":1.5}]"))
+                .isInstanceOf(IllegalArgumentException.class).hasMessageContaining("maxPetHpPct");
+        assertThatThrownBy(() -> RotationParser.parse("[{\"spell\":1,\"repeatMs\":-5}]"))
+                .isInstanceOf(IllegalArgumentException.class).hasMessageContaining("repeatMs");
+        assertThatThrownBy(() -> RotationParser.parse("[{\"spell\":1,\"repeatMs\":1.5}]"))
+                .isInstanceOf(IllegalArgumentException.class).hasMessageContaining("repeatMs");
+    }
 }

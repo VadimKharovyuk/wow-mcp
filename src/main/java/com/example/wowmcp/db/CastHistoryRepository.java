@@ -105,4 +105,16 @@ public class CastHistoryRepository extends BaseRepository {
             return List.of();
         }
     }
+
+    /** Дописывает spell_id в старые строки, где он остался NULL. Возвращает число обновлённых строк. */
+    public int backfillSpellId(int nameHash, int spellId) {
+        if (!isEnabled()) return 0;
+        try {
+            return jdbc().update("UPDATE spell_cast SET spell_id = ? WHERE name_hash = ? AND spell_id IS NULL",
+                    spellId, nameHash);
+        } catch (Exception e) {
+            log.warn("Не удалось дописать spell_id: {}", e.getMessage());
+            return 0;
+        }
+    }
 }

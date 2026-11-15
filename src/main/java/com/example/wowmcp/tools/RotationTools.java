@@ -50,26 +50,50 @@ public class RotationTools {
     }
 
     @Tool(name = "set_rotation", description = """
-            Задать приоритет умений: список от самого важного к основному удару. \
-            Поддерживаются v1 (по слоту панели, key "1".."9") и v2 (по nameHash заклинания, spell). \
-            Формат: JSON-массив [{"key":"2","maxHpPct":0.35},{"key":"4","waitAfter":{"key":"2","ms":1000}}] \
-            или [{"spell":123,"maxHpPct":0.35},{"spell":456,"waitAfter":{"spell":123,"ms":1000}}]. \
-            maxHpPct необязателен (0..1): умение применяется, только если HP ниже этой доли. \
-            outOfCombatOnly (true/false) — умение только вне боя. \
-            waitAfter {key|spell, ms} — не переходить к следующим умениям, пока с нажатия прошло меньше ms.""")
+            Задать приоритет умений: список от самого важного к основному удару. Применяется сразу \
+            и сохраняется в БД для активного профиля (переживает перезапуск и перезагрузку страницы). \
+            Формат v2 (по nameHash заклинания, как в spells): \
+            [{"spell":123,"maxHpPct":0.35},{"spell":456,"waitAfter":{"spell":123,"ms":1000}}]. \
+            Старый формат v1 (по слоту панели): [{"key":"2","maxHpPct":0.35},{"key":"4"}]. \
+            Поля правила, все необязательные: \
+            maxHpPct (0..1) — только если HP игрока ниже этой доли; \
+            maxPetHpPct (0..1) — только если HP питомца ниже этой доли; \
+            repeatMs — не повторять чаще, чем раз в repeatMs мс; \
+            outOfCombatOnly (true/false) — только вне боя; \
+            waitAfter {spell|key, ms} — не переходить к следующим умениям, пока с нажатия прошло меньше ms. \
+            Правила с maxHpPct, maxPetHpPct, repeatMs или key автообучение не затирает.""")
     public String setRotation(
-            @ToolParam(description = "JSON-массив вида [{\"key\":\"2\",\"maxHpPct\":0.35},"
-                    + "{\"key\":\"4\",\"maxHpPct\":0.35,\"waitAfter\":{\"key\":\"2\",\"ms\":1000}},"
-                    + "{\"key\":\"3\",\"outOfCombatOnly\":true},{\"key\":\"1\"}] или "
-                    + "[{\"spell\":123,\"maxHpPct\":0.35},{\"spell\":456,\"waitAfter\":{\"spell\":123,\"ms\":1000}}]")
+            @ToolParam(description = "JSON-массив v2: [{\"spell\":123,\"maxPetHpPct\":0.5},"
+                    + "{\"spell\":456,\"repeatMs\":15000},{\"spell\":789,\"maxHpPct\":0.35,"
+                    + "\"waitAfter\":{\"spell\":123,\"ms\":1000}},{\"spell\":321}]. "
+                    + "v1: [{\"key\":\"2\",\"maxHpPct\":0.35},{\"key\":\"1\"}]")
             String rotationJson) {
         List<Map<String, Object>> rotation = RotationParser.parse(rotationJson);
         bridge.ensureReady();
         Object saved = bridge.eval(
                 "(r) => { bot.rotation = r; return JSON.stringify(bot.rotation); }", rotation);
-        return JSON.writeValueAsString(Map.of(
-                "result", "ротация сохранена",
-                "rotation", JSON.readValue(String.valueOf(saved), Object.class)));
+
+        // Сохраняем в БД, иначе после перезагрузки страницы вернётся старая выученная ротация
+        String profile = String.valueOf(bridge.eval("() => bot.profile"));
+        boolean inDb = false;
+        if (db.isEnabled() && !"null".equals(profile) && !profile.isBlank()) {
+            Map<String, Object> row = profiles.loadRotationProfile(profile);
+            Integer samples = row == null ? null : asInt(row.get("samples"));
+            // статистика описывает прежнюю выученную ротацию, к заданной вручную она не относится
+            profiles.upsertRotationProfile(profile, JSON.writeValueAsString(rotation),
+                    samples == null ? 0 : samples, null);
+            inDb = true;
+        }
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("result", "ротация сохранена");
+        result.put("rotation", JSON.readValue(String.valueOf(saved), Object.class));
+        result.put("profile", "null".equals(profile) ? null : profile);
+        result.put("savedToDb", inDb);
+        if (!inDb) {
+            result.put("note", "в БД не сохранено: нет профиля (set_profile) или база не настроена — "
+                    + "после перезагрузки страницы ротация пропадёт");
+        }
+        return JSON.writeValueAsString(result);
     }
 
     @Tool(name = "get_rotation", description = """
