@@ -1,6 +1,7 @@
 package com.example.wowmcp.learn;
 
-import com.example.wowmcp.db.DbService;
+import com.example.wowmcp.db.Database;
+import com.example.wowmcp.db.CastHistoryRepository;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import tools.jackson.core.type.TypeReference;
@@ -27,12 +28,14 @@ public class RotationLearner {
     private static final Logger log = LoggerFactory.getLogger(RotationLearner.class);
     private static final ObjectMapper JSON = JsonMapper.builder().build();
 
-    private final DbService db;
+    private final Database db;
+    private final CastHistoryRepository casts;
     private final Map<String, Integer> lastLearnedCount = new ConcurrentHashMap<>();
     private final Map<String, String> lastStatsJson = new ConcurrentHashMap<>();
 
-    public RotationLearner(DbService db) {
+    public RotationLearner(Database db, CastHistoryRepository casts) {
         this.db = db;
+        this.casts = casts;
     }
 
     /** Результат обучения. */
@@ -67,7 +70,7 @@ public class RotationLearner {
         if (!db.isEnabled() || profile == null || profile.isBlank()) {
             return null;
         }
-        List<Map<String, Object>> rows = db.queryKeyPresses(profile);
+        List<Map<String, Object>> rows = casts.queryKeyPresses(profile);
         if (rows.isEmpty()) {
             return null;
         }
@@ -273,7 +276,7 @@ public class RotationLearner {
         } catch (Exception ignored) {
         }
         lastStatsJson.put(profile, statsJson);
-        lastLearnedCount.put(profile, db.queryKeyPresses(profile).size());
+        lastLearnedCount.put(profile, casts.queryKeyPresses(profile).size());
 
         log.info("Профиль '{}': выучена ротация {} (samples={})", profile, rotation, samples);
         return new Result(rotation, stats, samples);
@@ -291,7 +294,7 @@ public class RotationLearner {
         if (!db.isEnabled() || profile == null || profile.isBlank()) {
             return new SpellLearn(null, false, 0, REQUIRED_IN_COMBAT);
         }
-        List<Map<String, Object>> rows = db.querySpellCasts(profile);
+        List<Map<String, Object>> rows = casts.querySpellCasts(profile);
         if (rows.isEmpty()) {
             return new SpellLearn(null, false, 0, REQUIRED_IN_COMBAT);
         }

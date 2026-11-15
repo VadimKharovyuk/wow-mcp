@@ -8,11 +8,11 @@ import java.util.Map;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
-class WowToolsRotationTest {
+class RotationParserTest {
 
     @Test
     void acceptsValidRotation() {
-        List<Map<String, Object>> rotation = WowTools.parseRotation(
+        List<Map<String, Object>> rotation = RotationParser.parse(
                 "[{\"key\":\"3\",\"maxHpPct\":0.4},{\"key\":\"2\"},{\"key\":1}]");
 
         assertThat(rotation).hasSize(3);
@@ -23,7 +23,7 @@ class WowToolsRotationTest {
 
     @Test
     void acceptsOutOfCombatAndWaitAfter() {
-        List<Map<String, Object>> rotation = WowTools.parseRotation(
+        List<Map<String, Object>> rotation = RotationParser.parse(
                 "[{\"key\":\"2\",\"maxHpPct\":0.35},"
                         + "{\"key\":\"4\",\"maxHpPct\":0.35,\"waitAfter\":{\"key\":\"2\",\"ms\":1000}},"
                         + "{\"key\":3,\"outOfCombatOnly\":true},"
@@ -39,65 +39,65 @@ class WowToolsRotationTest {
 
     @Test
     void rejectsBadWaitAfter() {
-        assertThatThrownBy(() -> WowTools.parseRotation(
+        assertThatThrownBy(() -> RotationParser.parse(
                 "[{\"key\":\"4\",\"waitAfter\":{\"key\":\"0\",\"ms\":1000}}]"))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("waitAfter.key");
-        assertThatThrownBy(() -> WowTools.parseRotation(
+        assertThatThrownBy(() -> RotationParser.parse(
                 "[{\"key\":\"4\",\"waitAfter\":{\"key\":\"2\",\"ms\":10001}}]"))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("waitAfter.ms");
-        assertThatThrownBy(() -> WowTools.parseRotation(
+        assertThatThrownBy(() -> RotationParser.parse(
                 "[{\"key\":\"4\",\"waitAfter\":{\"key\":\"2\",\"ms\":\"soon\"}}]"))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("waitAfter.ms");
-        assertThatThrownBy(() -> WowTools.parseRotation("[{\"key\":\"4\",\"waitAfter\":1000}]"))
+        assertThatThrownBy(() -> RotationParser.parse("[{\"key\":\"4\",\"waitAfter\":1000}]"))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("waitAfter");
     }
 
     @Test
     void rejectsNonBooleanOutOfCombatOnly() {
-        assertThatThrownBy(() -> WowTools.parseRotation("[{\"key\":\"3\",\"outOfCombatOnly\":\"yes\"}]"))
+        assertThatThrownBy(() -> RotationParser.parse("[{\"key\":\"3\",\"outOfCombatOnly\":\"yes\"}]"))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("outOfCombatOnly");
     }
 
     @Test
     void rejectsBadSlot() {
-        assertThatThrownBy(() -> WowTools.parseRotation("[{\"key\":\"0\"}]"))
+        assertThatThrownBy(() -> RotationParser.parse("[{\"key\":\"0\"}]"))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("key");
     }
 
     @Test
     void rejectsMissingKey() {
-        assertThatThrownBy(() -> WowTools.parseRotation("[{\"maxHpPct\":0.5}]"))
+        assertThatThrownBy(() -> RotationParser.parse("[{\"maxHpPct\":0.5}]"))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("key");
     }
 
     @Test
     void rejectsThresholdOutOfRange() {
-        assertThatThrownBy(() -> WowTools.parseRotation("[{\"key\":\"1\",\"maxHpPct\":1.5}]"))
+        assertThatThrownBy(() -> RotationParser.parse("[{\"key\":\"1\",\"maxHpPct\":1.5}]"))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("maxHpPct");
     }
 
     @Test
     void rejectsDuplicateSlot() {
-        assertThatThrownBy(() -> WowTools.parseRotation("[{\"key\":\"1\"},{\"key\":\"1\"}]"))
+        assertThatThrownBy(() -> RotationParser.parse("[{\"key\":\"1\"},{\"key\":\"1\"}]"))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("больше одного раза");
     }
 
     @Test
     void rejectsEmptyOrBrokenJson() {
-        assertThatThrownBy(() -> WowTools.parseRotation("[]"))
+        assertThatThrownBy(() -> RotationParser.parse("[]"))
                 .isInstanceOf(IllegalArgumentException.class);
-        assertThatThrownBy(() -> WowTools.parseRotation("not json"))
+        assertThatThrownBy(() -> RotationParser.parse("not json"))
                 .isInstanceOf(IllegalArgumentException.class);
-        assertThatThrownBy(() -> WowTools.parseRotation(null))
+        assertThatThrownBy(() -> RotationParser.parse(null))
                 .isInstanceOf(IllegalArgumentException.class);
     }
 }

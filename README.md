@@ -267,9 +267,23 @@ java -Dwow.bot-js-dir=/Users/vadim/Downloads/wow-mcp/src/main/resources/bot \
 src/main/java/com/example/wowmcp/
   WowMcpApplication.java          // точка входа + регистрация @Tool-методов
   config/WowProperties.java       // wow.cdp-url, wow.page-url-contains
-  game/GameBridge.java            // CDP, evaluate, подготовка bot.js и Lua
+  game/GameBridge.java            // фасад: report/start/stop/eval для инструментов
+  game/PageConnection.java        // Playwright, CDP, поток, переподключение
+  game/BotReadiness.java          // загрузка bot.js и Lua-подготовка
+  game/GameSessionSync.java       // профиль и KEEP из БД → игра
+  game/BotScriptLoader.java       // сборка bot/*.js по manifest.txt
+  game/LuaSources.java            // lua-setup.txt + lua/*.lua, версия
+  game/LuaMinifier.java           // сжатие и нарезка Lua для чата
   game/GameState.java             // record под JSON из bot.report()
-  tools/WowTools.java             // MCP-инструменты этапов 1–2
+  db/Database.java                // пул PostgreSQL, флаг «БД доступна», схема (SchemaInitializer)
+  db/*Repository.java             // Kill, Path, CastHistory, Profile, Vendor, KeepItem
+  db/EventCollector.java          // сбор событий бота раз в 3 с
+  tools/BotActionTools.java       // get_state, go_to, move_to, fight, loot, rest, wait_job, stop, reload_bot
+  tools/GrindTools.java           // grind, spots
+  tools/RecordingTools.java       // record_start, record_stop
+  tools/RotationTools.java        // spells, ротация, профили, обучение
+  tools/InventoryTools.java       // bags, торговцы, sell_now, keep_item
+  tools/ToolSupport.java          // общие помощники; RotationParser, GrindOptions — валидация
 src/main/resources/
   bot/                            // модули бота
     00-core.js                    // window.* хелперы, базовый bot, start/report

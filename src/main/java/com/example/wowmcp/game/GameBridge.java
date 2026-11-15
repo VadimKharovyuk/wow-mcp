@@ -1,576 +1,102 @@
 package com.example.wowmcp.game;
 
-import com.example.wowmcp.config.WowProperties;
-import com.example.wowmcp.db.DbService;
-import com.example.wowmcp.learn.RotationLearner;
-import com.microsoft.playwright.Browser;
-import com.microsoft.playwright.BrowserContext;
-import com.microsoft.playwright.Page;
-import com.microsoft.playwright.Playwright;
 import com.microsoft.playwright.PlaywrightException;
-import jakarta.annotation.PreDestroy;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.boot.context.event.ApplicationReadyEvent;
 import org.springframework.context.event.EventListener;
 import org.springframework.stereotype.Component;
 
-import java.io.IOException;
-import java.io.InputStream;
-import java.nio.charset.StandardCharsets;
-import java.nio.file.Files;
-import java.nio.file.Path;
-import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
-import java.util.concurrent.Callable;
-import java.util.concurrent.ExecutionException;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
-import java.util.concurrent.Future;
-import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.AtomicInteger;
-import java.util.concurrent.TimeoutException;
-import java.util.function.Supplier;
+
+import static com.example.wowmcp.game.BotReadiness.BOT_LOADED_JS;
+import static com.example.wowmcp.game.BotReadiness.READY_OPERATION_TIMEOUT_MS;
 
 /**
- * Мост в запущенный Chrome с игрой.
- *
- * <p>Playwright не потокобезопасен, поэтому все обращения к {@link Page} выполняются
- * в одном выделенном потоке. Подключение к Chrome ленивое — при первом вызове инструмента.
+ * Фасад для инструментов MCP и фонового сборщика событий: мост в запущенный Chrome с игрой.
  *
  * <p>Java не управляет персонажем в цикле: вся логика ходьбы/боя живёт в bot.js,
- * здесь только вызовы {@code bot.*}.
+ * здесь только вызовы {@code bot.*}. Сама работа разнесена по классам:
+ * <ul>
+ *   <li>{@link PageConnection} — Playwright, CDP, поток, переподключение;</li>
+ *   <li>{@link BotReadiness} — загрузка бота и Lua-подготовка;</li>
+ *   <li>{@link BotScriptLoader}, {@link LuaSources}, {@link LuaMinifier} — исходники бота и Lua;</li>
+ *   <li>{@link GameSessionSync} — перенос профиля и KEEP из БД в игру.</li>
+ * </ul>
  */
 @Component
-public class GameBridge implements AutoCloseable {
+public class GameBridge {
 
     private static final Logger log = LoggerFactory.getLogger(GameBridge.class);
 
-    private static final String BOT_MANIFEST_RESOURCE = "bot/manifest.txt";
-    private static final String BOT_MODULE_PREFIX = "bot/";
-    private static final String BOT_MODULE_JOINER = ";\n";
-    // LUA_VERSION и LUA_SETUP теперь вычисляются динамически (см. luaVersion()/readLuaSetupLines()),
-    // чтобы поддерживать режим разработки wow.lua-dir.
+    private final PageConnection connection;
+    private final BotReadiness readiness;
 
-    private static final long LUA_LINE_PAUSE_MS = 300;
-    /** Чанк Lua-кода для одной строки чата WoW: ≤ 215 БАЙТ (лимит строки чата — 255 БАЙТ, обёртка /run … [==[ … ]==] ~35 символов). */
-    private static final int LUA_CHUNK_SIZE = 215;
-    private static final long STATE_TIME_WINDOW_MS = 1000;
-    /** Пауза после bot.stop() перед удалением бота: чтобы клавиши успели отпуститься. */
-    private static final long RELOAD_RELEASE_KEYS_PAUSE_MS = 200;
-
-    /** Сколько раз пробуем Lua-подготовку, прежде чем сдаться. */
-    private static final int LUA_SETUP_ATTEMPTS = 2;
-    /** Общий бюджет на всю подготовку бота (все попытки вместе). */
-    private static final long READY_TIMEOUT_MS = 100_000;
-    /** Страховка на стороне Java: подготовка + сам вызов инструмента. */
-    private static final long READY_OPERATION_TIMEOUT_MS = 110_000;
-
-    private static final String LUA_NOT_FOUND_MESSAGE =
-            "Lua-таблица не найдена: проверь, что персонаж в игре и чат не занят";
-
-    private static final String READY_TIMEOUT_MESSAGE =
-            "Lua-подготовка не уложилась в " + (READY_TIMEOUT_MS / 1000) + " с (попыток: "
-                    + LUA_SETUP_ATTEMPTS + "). "
-                    + "Игра на паузе или окно Chrome свёрнуто? Разверни окно игры и повтори.";
-
-    private static final String NO_RESPONSE_MESSAGE =
-            "Игра не ответила за " + (READY_OPERATION_TIMEOUT_MS / 1000) + " с. "
-                    + "Игра на паузе или окно Chrome свёрнуто? Разверни окно игры и повтори.";
-
-    /**
-     * {@code bot.find()} с таймаутом на стороне страницы: если таймеры вкладки
-     * заморожены, промис не повиснет навсегда, а вернёт {@code timeout}.
-     */
-    private static final String FIND_WITH_TIMEOUT_JS =
-            "(ms) => Promise.race(["
-                    + "bot.find().then(() => 'ok', e => 'error:' + (e && e.message ? e.message : e)),"
-                    + "new Promise(resolve => setTimeout(() => resolve('timeout'), ms))"
-                    + "])";
-
-    private final WowProperties properties;
-    private final DbService db;
-    private final RotationLearner learner;
-
-    private final ExecutorService playwrightThread = Executors.newSingleThreadExecutor(runnable -> {
-        Thread thread = new Thread(runnable, "wow-playwright");
-        thread.setDaemon(true);
-        return thread;
-    });
-
-    // Все поля ниже трогаем только из потока playwrightThread.
-    private Playwright playwright;
-    private Browser browser;
-    private Page page;
-
-    /**
-     * Счётчик выполняющихся «тяжёлых» операций на странице (report/start/reloadBot/ensureReady/...).
-     * Пока он больше нуля, фоновый {@link com.example.wowmcp.db.EventCollector} не должен
-     * трогать страницу — иначе его таймаут прервёт выполняющуюся операцию.
-     */
-    private final AtomicInteger busy = new AtomicInteger(0);
-
-    /** Время bot.state().time на момент начала Lua-подготовки — для определения, тикали ли таймеры страницы. */
-    private volatile double initialTimeForSetup;
-
-    /** Блокировка автоматических подготовок после 2 неудач подряд (сбрасывается reload_bot). */
-    private volatile boolean luaBlocked = false;
-    private volatile int consecutiveLuaFailures = 0;
-
-    public GameBridge(WowProperties properties, DbService db, RotationLearner learner) {
-        this.properties = properties;
-        this.db = db;
-        this.learner = learner;
+    GameBridge(PageConnection connection, BotReadiness readiness) {
+        this.connection = connection;
+        this.readiness = readiness;
     }
 
-    // ------------------------------------------------------------------
-    // Публичный API для инструментов MCP
-    // ------------------------------------------------------------------
-
-    /**
-     * Фоновое подключение сразу после старта сервера: находим вкладку игры и, если нужно,
-     * загружаем bot.js. Lua-подготовки здесь нет (она печатает в чат) — только чтобы
-     * события (убийства, применения заклинаний) начали писаться без первой команды.
-     */
+    /** Фоновое подключение сразу после старта сервера (см. {@link BotReadiness#warmUp()}). */
     @EventListener(ApplicationReadyEvent.class)
     public void connectOnStartup() {
-        playwrightThread.submit(() -> {
-            try {
-                ensureConnected();
-                boolean injected = false;
-                if (!isBotLoaded()) {
-                    injectBot();
-                    autoLoadProfile();
-                    injected = true;
-                }
-                try {
-                    page.evaluate("() => bot.find()");
-                } catch (PlaywrightException e) {
-                    log.debug("Фоновый bot.find() не удался: {}", e.getMessage());
-                }
-                log.info("Фоновое подключение к игре готово (бот {}): события пишутся без вызова инструментов",
-                        injected ? "загружен, профиль " + page.evaluate("() => bot.profile") : "уже был в странице");
-            } catch (RuntimeException e) {
-                log.info("Фоновое подключение к игре не удалось: {} — подключусь при первом вызове инструмента",
-                        e.getMessage());
-            }
-        });
+        connection.submit(readiness::warmUp);
     }
 
     /** Сырой JSON от {@code bot.report()} с предварительной проверкой готовности бота. */
     public String report() {
-        busy.incrementAndGet();
-        try {
-            return onPlaywrightThread(READY_OPERATION_TIMEOUT_MS, () -> retryOnDisconnect(() -> {
-                ensureReadyInternal();
-                return (String) evaluate("() => bot.report()");
-            }));
-        } finally {
-            busy.decrementAndGet();
-        }
+        return connection.call(READY_OPERATION_TIMEOUT_MS, () -> {
+            readiness.ensureReady();
+            return (String) connection.page().evaluate("() => bot.report()");
+        });
     }
 
     /** {@code bot.report()} без проверки готовности — для частого опроса в wait_job. */
     public String reportRaw() {
-        busy.incrementAndGet();
-        try {
-            return onPlaywrightThread(() -> retryOnDisconnect(() -> (String) evaluate("() => bot.report()")));
-        } finally {
-            busy.decrementAndGet();
-        }
+        return connection.call(() -> (String) connection.page().evaluate("() => bot.report()"));
     }
 
     /** Запускает фоновую задачу бота ({@code bot.start(name, ...args)}). */
     public String start(String name, List<?> args) {
-        busy.incrementAndGet();
-        try {
-            return onPlaywrightThread(READY_OPERATION_TIMEOUT_MS, () -> retryOnDisconnect(() -> {
-                ensureReadyInternal();
-                Object result = page.evaluate("(p) => bot.start(p.name, ...p.args)",
-                        Map.of("name", name, "args", args));
-                return String.valueOf(result);
-            }));
-        } finally {
-            busy.decrementAndGet();
-        }
+        return connection.call(READY_OPERATION_TIMEOUT_MS, () -> {
+            readiness.ensureReady();
+            Object result = connection.page().evaluate("(p) => bot.start(p.name, ...p.args)",
+                    Map.of("name", name, "args", args));
+            return String.valueOf(result);
+        });
     }
 
     /** Экстренная остановка: не ждём Lua-подготовки, просто гасим бота, если он загружен. */
     public String stop() {
-        busy.incrementAndGet();
-        try {
-            return onPlaywrightThread(() -> retryOnDisconnect(() -> (String) evaluate(
-                    "() => { if (window.bot) { bot.stop(); return 'остановлено'; } "
-                            + "return 'бот не загружен — останавливать нечего'; }")));
-        } finally {
-            busy.decrementAndGet();
-        }
+        return connection.call(() -> (String) connection.page().evaluate(
+                "() => { if (window.bot) { bot.stop(); return 'остановлено'; } "
+                        + "return 'бот не загружен — останавливать нечего'; }"));
     }
 
     /** Проверяет, что bot.js загружен, Lua-таблица найдена и игра не перезагружалась. */
     public void ensureReady() {
-        busy.incrementAndGet();
-        try {
-            onPlaywrightThread(READY_OPERATION_TIMEOUT_MS, () -> retryOnDisconnect(() -> {
-                ensureReadyInternal();
-                return null;
-            }));
-        } finally {
-            busy.decrementAndGet();
-        }
+        connection.call(READY_OPERATION_TIMEOUT_MS, () -> {
+            readiness.ensureReady();
+            return null;
+        });
     }
 
-    /**
-     * Перезагружает bot.js в странице игры без перезагрузки самой страницы.
-     *
-     * <p>Останавливает бота (чтобы отпустились клавиши), удаляет {@code window.bot}
-     * и снова проходит обычную подготовку: скрипт вставляется заново, затем выполняется
-     * Lua-подготовка и поиск таблицы.
-     */
+    /** Перезагружает bot.js в странице игры без перезагрузки самой страницы. */
     public String reloadBot() {
-        luaBlocked = false;
-        consecutiveLuaFailures = 0;
-        busy.incrementAndGet();
-        try {
-            return onPlaywrightThread(READY_OPERATION_TIMEOUT_MS, () -> retryOnDisconnect(() -> {
-                log.info("Перезагружаю bot.js, старый бот останавливается");
-                page.evaluate("() => { if (window.bot && window.bot.dispose) window.bot.dispose(); }");
-                page.evaluate("() => { if (window.bot) window.bot.stop(); }");
-                sleep(RELOAD_RELEASE_KEYS_PAUSE_MS);
-                page.evaluate("() => { delete window.bot; }");
-                try {
-                    ensureReadyInternal();
-                } catch (RuntimeException e) {
-                    log.warn("reload_bot: подготовка не удалась: {}", e.getMessage());
-                    return "бот перезагружен, но подготовка не удалась: " + e.getMessage();
-                }
-                return "бот перезагружен: " + botJsSource();
-            }));
-        } finally {
-            busy.decrementAndGet();
-        }
-    }
-
-    /** Отправляет KEEP[id]=true в игру батчами (каждая строка <= 200 байт), без /run на каждый предмет. */
-    private void syncKeepItemsToGame() {
-        if (db == null || !db.isEnabled()) return;
-        List<Integer> ids;
-        try {
-            ids = db.listKeepItemIds();
-        } catch (RuntimeException e) {
-            log.warn("Не удалось прочитать keep_item для синхронизации: {}", e.getMessage());
-            return;
-        }
-        if (ids == null || ids.isEmpty()) return;
-        StringBuilder batch = new StringBuilder();
-        for (int id : ids) {
-            String piece = (batch.length() == 0) ? String.valueOf(id) : "," + id;
-            String cmd = "/run for _,i in ipairs({" + batch + piece + "}) do KEEP[i]=true end";
-            if (cmd.getBytes(StandardCharsets.UTF_8).length > 200) {
-                if (batch.length() > 0) {
-                    String send = "/run for _,i in ipairs({" + batch + "}) do KEEP[i]=true end";
-                    page.evaluate("t => chat(t)", send);
-                    sleep(LUA_LINE_PAUSE_MS);
-                }
-                batch = new StringBuilder(String.valueOf(id));
-            } else {
-                if (batch.length() > 0) batch.append(',');
-                else batch = new StringBuilder();
-                batch.append(id);
-            }
-        }
-        if (batch.length() > 0) {
-            String send = "/run for _,i in ipairs({" + batch + "}) do KEEP[i]=true end";
-            page.evaluate("t => chat(t)", send);
-            sleep(LUA_LINE_PAUSE_MS);
-        }
-        log.info("Синхронизировано KEEP предметов в игру: {}", ids.size());
-    }
-
-    /** Автозагрузка последнего профиля после загрузки нового window.bot. */
-    private void autoLoadProfile() {
-        if (db == null || !db.isEnabled() || learner == null) return;
-        // Сначала явно сохранённый активный профиль (set_profile), иначе — последний использованный.
-        String profile = db.findActiveProfile();
-        if (profile == null || profile.isBlank()) {
-            profile = db.findLastUsedProfile();
-        }
-        if (profile == null || profile.isBlank()) return;
-        try {
-            page.evaluate("(p) => bot.setProfile ? bot.setProfile(p) : (bot.profile = p, window.__wowProfile = p)", profile);
-            Map<String, Object> row = db.loadRotationProfile(profile);
-            if (row != null && row.get("rotation_json") != null) {
-                tools.jackson.databind.ObjectMapper om = tools.jackson.databind.json.JsonMapper.builder().build();
-                Object rotation = om.readValue(String.valueOf(row.get("rotation_json")), Object.class);
-                page.evaluate("(r) => { bot.rotation = r; return 'ok'; }", rotation);
-            }
-            db.touchProfile(profile);
-            log.info("Автозагрузка профиля '{}': ротация {}", profile,
-                    row == null ? "по умолчанию" : row.get("rotation_json"));
-        } catch (Exception e) {
-            log.warn("Автозагрузка профиля не удалась: {}", e.getMessage());
-        }
-    }
-
-    /** Откуда берётся bot.js — для отчёта reload_bot. */
-    private String botJsSource() {
-        String dir = properties.botJsDir();
-        return dir == null ? "из classpath (bot/manifest.txt)" : "с диска " + dir;
+        readiness.reset();
+        return connection.call(READY_OPERATION_TIMEOUT_MS, readiness::reloadBot);
     }
 
     /** Произвольное выражение/функция в контексте страницы игры. */
     public Object eval(String js) {
-        busy.incrementAndGet();
-        try {
-            return onPlaywrightThread(() -> retryOnDisconnect(() -> page.evaluate(js)));
-        } finally {
-            busy.decrementAndGet();
-        }
+        return connection.call(() -> connection.page().evaluate(js));
     }
 
     /** Вызов функции с аргументом — Playwright сам сериализует его в JS. */
     public Object eval(String fn, Object arg) {
-        busy.incrementAndGet();
-        try {
-            return onPlaywrightThread(() -> retryOnDisconnect(() -> page.evaluate(fn, arg)));
-        } finally {
-            busy.decrementAndGet();
-        }
-    }
-
-    // ------------------------------------------------------------------
-    // Подключение и переподключение (только в потоке playwrightThread)
-    // ------------------------------------------------------------------
-
-    private void ensureConnected() {
-        if (page != null && !page.isClosed()) {
-            return;
-        }
-
-        if (playwright == null) {
-            log.info("Инициализирую Playwright (браузеры не скачиваем, работаем по CDP)");
-            playwright = Playwright.create(new Playwright.CreateOptions()
-                    .setEnv(Map.of("PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD", "1")));
-        }
-
-        if (browser == null || !browser.isConnected()) {
-            log.info("Подключаюсь к Chrome по CDP: {}", properties.cdpUrl());
-            try {
-                browser = playwright.chromium().connectOverCDP(properties.cdpUrl());
-            } catch (PlaywrightException e) {
-                throw new IllegalStateException(
-                        "Не удалось подключиться к Chrome по CDP (" + properties.cdpUrl() + "). "
-                                + "Запусти Chrome с --remote-debugging-port=9222 "
-                                + "и открой вкладку игры.", e);
-            }
-        }
-
-        page = findGamePage();
-        log.info("Нашёл вкладку игры: {}", page.url());
-    }
-
-    private Page findGamePage() {
-        for (BrowserContext context : browser.contexts()) {
-            for (Page candidate : context.pages()) {
-                if (candidate.url().contains(properties.pageUrlContains())) {
-                    return candidate;
-                }
-            }
-        }
-        throw new IllegalStateException(
-                "Вкладка с URL, содержащим \"" + properties.pageUrlContains() + "\", не найдена в Chrome ("
-                        + properties.cdpUrl() + "). Открой игру в этом браузере.");
-    }
-
-    private void forgetPage() {
-        // Важно: не вызываем browser.close() — для connectOverCDP это закрыло бы
-        // сам Chrome пользователя. Просто теряем ссылки; новое подключение создастся заново.
-        page = null;
-        browser = null;
-    }
-
-    /**
-     * Выполняет действие на странице; при обрыве соединения один раз переподключается
-     * и повторяет действие.
-     */
-    private <T> T retryOnDisconnect(Supplier<T> action) {
-        ensureConnected();
-        try {
-            return action.get();
-        } catch (PlaywrightException e) {
-            if (Thread.currentThread().isInterrupted() || stillConnected()) {
-                // Это не обрыв связи, а ошибка самого вызова — повторять бессмысленно.
-                throw e;
-            }
-            log.warn("Соединение с игрой упало ({}). Переподключаюсь и повторяю.", e.getMessage());
-            forgetPage();
-            ensureConnected();
-            return action.get();
-        }
-    }
-
-    /** Соединение с вкладкой всё ещё живо (значит, ошибка не сетевая). */
-    private boolean stillConnected() {
-        try {
-            return page != null && !page.isClosed() && browser != null && browser.isConnected();
-        } catch (PlaywrightException e) {
-            return false;
-        }
-    }
-
-    // ------------------------------------------------------------------
-    // Подготовка бота
-    // ------------------------------------------------------------------
-
-    private void ensureReadyInternal() {
-        if (luaBlocked) {
-            throw new IllegalStateException("подготовка заблокирована после неудач, зайди в игру и вызови reload_bot");
-        }
-
-        long deadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(READY_TIMEOUT_MS);
-        boolean injected = false;
-        if (!isBotLoaded()) {
-            injectBot();
-            injected = true;
-        }
-
-        // Сначала пробуем найти таблицу без ввода Lua: она могла остаться в игре.
-        initialTimeForSetup = safeStateTime();
-        try {
-            page.evaluate("() => bot.find()");
-        } catch (PlaywrightException e) {
-            log.debug("bot.find() без Lua не удался: {}", e.getMessage());
-        }
-        if (!isAddrUnset()) {
-            Object v = page.evaluate("() => window.bot.state().luaVer");
-            int ver = (v instanceof Number n) ? n.intValue() : -1;
-            if (ver == luaVersion() && isStateTimeAlive(deadline)) {
-                log.info("Lua-таблица уже в игре (версия {}) — подготовка пропущена", ver);
-                consecutiveLuaFailures = 0;
-                if (injected) {
-                    autoLoadProfile();
-                }
-                syncKeepItemsToGame();
-                return;
-            }
-        }
-
-        log.info("...выполняю подготовку");
-
-        RuntimeException lastError = null;
-        boolean notInWorld = false;
-        for (int attempt = 1; attempt <= LUA_SETUP_ATTEMPTS; attempt++) {
-            long attemptDeadline = attemptDeadline(deadline, attempt);
-            long budgetMs = remainingMs(attemptDeadline);
-            if (budgetMs <= 0) {
-                log.warn("Lua-подготовка: попытка {}/{} не запущена — общий таймаут {} с исчерпан",
-                        attempt, LUA_SETUP_ATTEMPTS, READY_TIMEOUT_MS / 1000);
-                break;
-            }
-            log.info("Lua-подготовка: попытка {}/{} (бюджет {} мс, всего осталось {} мс)",
-                    attempt, LUA_SETUP_ATTEMPTS, budgetMs, remainingMs(deadline));
-            initialTimeForSetup = safeStateTime();
-            try {
-                runLuaSetup(attemptDeadline);
-                consecutiveLuaFailures = 0;
-                if (injected) {
-                    autoLoadProfile();
-                }
-                syncKeepItemsToGame();
-                return;
-            } catch (RuntimeException e) {
-                lastError = e;
-                consecutiveLuaFailures++;
-                if (e.getMessage() != null && e.getMessage().toLowerCase().contains("not in world")) {
-                    notInWorld = true;
-                    if (consecutiveLuaFailures >= 2) {
-                        luaBlocked = true;
-                    }
-                    break;
-                }
-                if (consecutiveLuaFailures >= 2) {
-                    luaBlocked = true;
-                }
-                log.warn("Lua-подготовка: попытка {}/{} не удалась: {}",
-                        attempt, LUA_SETUP_ATTEMPTS, e.getMessage());
-            }
-            if (attempt < LUA_SETUP_ATTEMPTS) {
-                log.info("Повторяю Lua-подготовку");
-            }
-        }
-        if (notInWorld) {
-            throw new IllegalStateException("Персонаж не в мире (экран входа). Зайди в игру вручную", lastError);
-        }
-        if (luaBlocked) {
-            throw new IllegalStateException("подготовка заблокирована после неудач, зайди в игру и вызови reload_bot");
-        }
-        throw lastError != null ? lastError : readyTimeout();
-    }
-
-    /**
-     * Пора ли выполнять Lua-подготовку: таблицы ещё нет или интерфейс игры
-     * перезагружался ({@code bot.state().time} не тикает).
-     */
-    private boolean needsLuaSetup(long deadline) {
-        if (isAddrUnset()) {
-            return true;
-        }
-        if (isStateTimeAlive(deadline)) {
-            return false;
-        }
-        log.warn("bot.state().time не меняется — похоже, интерфейс игры перезагружался. "
-                + "Повторяю Lua-подготовку.");
-        page.evaluate("() => { window.bot.addr = null; }");
-        return true;
-    }
-
-    /** Бюджет попытки: первая попытка получает весь оставшийся бюджет. */
-    private static long attemptDeadline(long deadline, int attempt) {
-        if (attempt == 1) {
-            return deadline;
-        }
-        return System.nanoTime() + remainingNanos(deadline);
-    }
-
-    private static long remainingNanos(long deadline) {
-        return Math.max(0, deadline - System.nanoTime());
-    }
-
-    private static long remainingMs(long deadline) {
-        return TimeUnit.NANOSECONDS.toMillis(remainingNanos(deadline));
-    }
-
-    /**
-     * Приводит миллисекунды к {@code int} для передачи в страницу: Playwright
-     * сериализует только {@link Integer} и {@link Double}, на {@link Long} бросает
-     * «Unsupported type of argument».
-     */
-    /** Playwright передаёт в страницу только Integer/Double — приводим long к int с ограничением. */
-    static int toPageTimeoutMs(long ms) {
-        if (ms <= 0) {
-            return 0;
-        }
-        return (int) Math.min(Integer.MAX_VALUE, ms);
-    }
-    private IllegalStateException readyTimeout() {
-        boolean ticked = false;
-        try {
-            double now = safeStateTime();
-            ticked = initialTimeForSetup > 0 && now != initialTimeForSetup;
-        } catch (RuntimeException ignored) {
-        }
-        int secs = (int) (READY_TIMEOUT_MS / 1000);
-        if (ticked) {
-            return new IllegalStateException(
-                    "Lua-подготовка не успела за " + secs + " с");
-        }
-        return new IllegalStateException(READY_TIMEOUT_MESSAGE);
-    }
-
-    private boolean isBotLoaded() {
-        return Boolean.TRUE.equals(page.evaluate("typeof window.bot !== 'undefined'"));
+        return connection.call(() -> connection.page().evaluate(fn, arg));
     }
 
     /**
@@ -580,16 +106,16 @@ public class GameBridge implements AutoCloseable {
     public boolean isBotLoadedIfConnected() {
         // Пока идёт тяжёлая операция, не трогаем страницу: иначе таймаут фонового
         // сборщика событий прервёт выполняющуюся операцию.
-        if (busy.get() > 0) {
+        if (connection.isBusy()) {
             return false;
         }
         try {
-            return onPlaywrightThread(2000, () -> {
-                if (page == null || page.isClosed()) {
+            return connection.callOnce(2000, () -> {
+                if (connection.page() == null || connection.page().isClosed()) {
                     return false;
                 }
                 try {
-                    return Boolean.TRUE.equals(page.evaluate("typeof window.bot !== 'undefined'"));
+                    return Boolean.TRUE.equals(connection.page().evaluate(BOT_LOADED_JS));
                 } catch (PlaywrightException e) {
                     return false;
                 }
@@ -604,485 +130,18 @@ public class GameBridge implements AutoCloseable {
      * Не вызывает ensureReady и не подключается к Chrome.
      */
     public Optional<String> evalIfReady(String js, long timeoutMs) {
-        if (busy.get() > 0) {
+        if (connection.isBusy()) {
             return Optional.empty();
         }
         if (!isBotLoadedIfConnected()) {
             return Optional.empty();
         }
         try {
-            Object result = onPlaywrightThread(timeoutMs, () -> page.evaluate(js));
+            Object result = connection.callOnce(timeoutMs, () -> connection.page().evaluate(js));
             return Optional.of(result == null ? "" : String.valueOf(result));
         } catch (RuntimeException e) {
             log.debug("evalIfReady('{}') не удался: {}", js, e.getMessage());
             return Optional.empty();
-        }
-    }
-
-    private void injectBot() {
-        log.info("Загружаю модули bot.js в страницу игры ({})", botJsSource());
-        page.evaluate("(src) => { (0, eval)(src); }", readBotJs());
-        if (!isBotLoaded()) {
-            throw new IllegalStateException("Не удалось загрузить bot.js: window.bot не появился");
-        }
-    }
-
-    /**
-     * Читает модули bot.js по порядку из manifest.txt и склеивает их через ";\n".
-     * Если задано {@code wow.bot-js-dir}, модули читаются с диска при каждой загрузке
-     * (пересборка не нужна), иначе — из classpath.
-     */
-    private String readBotJs() {
-        String dir = properties.botJsDir();
-        List<String> modules = readBotModules(dir);
-
-        StringBuilder js = new StringBuilder();
-        for (String module : modules) {
-            String source = readBotModule(dir, module).stripTrailing();
-            if (source.isEmpty()) {
-                continue;
-            }
-            if (!js.isEmpty()) {
-                js.append(BOT_MODULE_JOINER);
-            }
-            js.append(source);
-        }
-        return js.toString();
-    }
-
-    /** Список модулей из manifest.txt: по одному имени на строку, # — комментарий. */
-    private static List<String> readBotModules(String dir) {
-        String manifestPath = dir == null ? BOT_MANIFEST_RESOURCE : dir + "/manifest.txt";
-        String manifest = dir == null
-                ? readResource(BOT_MANIFEST_RESOURCE)
-                : readFile(Path.of(dir, "manifest.txt"));
-
-        List<String> modules = manifest.lines()
-                .map(String::strip)
-                .filter(line -> !line.isEmpty() && !line.startsWith("#"))
-                .toList();
-        if (modules.isEmpty()) {
-            throw new IllegalStateException("Манифест модулей бота пуст: " + manifestPath);
-        }
-        return modules;
-    }
-
-    private static String readBotModule(String dir, String module) {
-        if (module.contains("..") || module.contains("/") || module.contains("\\")) {
-            throw new IllegalStateException("Недопустимое имя модуля в manifest.txt: " + module);
-        }
-        return dir == null
-                ? readResource(BOT_MODULE_PREFIX + module)
-                : readFile(Path.of(dir, module));
-    }
-
-    private static String readFile(Path path) {
-        try {
-            return Files.readString(path, StandardCharsets.UTF_8);
-        } catch (IOException e) {
-            throw new IllegalStateException("Не удалось прочитать " + path, e);
-        }
-    }
-
-    private boolean isAddrUnset() {
-        return Boolean.TRUE.equals(page.evaluate(
-                "typeof window.bot !== 'undefined' && window.bot.addr === null"));
-    }
-
-    /** GetTime() из игры должен тикать; если нет — интерфейс перезагрузили. */
-    private boolean isStateTimeAlive(long deadline) {
-        long windowMs = Math.min(STATE_TIME_WINDOW_MS, remainingMs(deadline));
-        if (windowMs <= 0) {
-            return false;
-        }
-        double before = stateTime();
-        sleep(windowMs);
-        double after = stateTime();
-        return before > 0 && after != before;
-    }
-
-    private double stateTime() {
-        Object value = page.evaluate("() => window.bot.state().time");
-        return value instanceof Number number ? number.doubleValue() : 0d;
-    }
-
-    /** Безопасное чтение bot.state().time (0, если таблица ещё не найдена). */
-    private double safeStateTime() {
-        try {
-            if (page == null || page.isClosed() || isAddrUnset()) {
-                return 0d;
-            }
-            return stateTime();
-        } catch (RuntimeException e) {
-            return 0d;
-        }
-    }
-
-    /**
-     * Вводит Lua-строки в чат и ищет таблицу. Ни один шаг не ждёт дольше
-     * {@code attemptDeadline}: если игра зависла или вкладка заморожена,
-     * бросаем {@link #READY_TIMEOUT_MESSAGE}, а не висим.
-     */
-    private void runLuaSetup(long attemptDeadline) {
-        List<String> luaSetup = readLuaSetupLines();
-        log.info("Выполняю Lua-подготовку ({} строк)", luaSetup.size());
-        page.evaluate("() => { const c = document.getElementById('canvas'); if (c) c.focus(); }");
-        for (String line : luaSetup) {
-            long remaining = remainingMs(attemptDeadline);
-            if (remaining <= 0) {
-                throw readyTimeout();
-            }
-            page.evaluate("t => chat(t)", line);
-            sleep(Math.min(LUA_LINE_PAUSE_MS, remainingMs(attemptDeadline)));
-        }
-        long remaining = remainingMs(attemptDeadline);
-        if (remaining <= 0) {
-            throw readyTimeout();
-        }
-        // Playwright дождётся промиса, который вернёт find(); сам find ограничен
-        // таймаутом, чтобы не зависнуть, если таймеры страницы заморожены.
-        // Важно: аргумент — int, а не long: Playwright умеет передавать в страницу
-        // только Integer/Double, на Long падает «Unsupported type of argument».
-        Object result = page.evaluate(FIND_WITH_TIMEOUT_JS, toPageTimeoutMs(remaining));
-        if ("timeout".equals(result)) {
-            throw readyTimeout();
-        }
-        if (!"ok".equals(result)) {
-            throw new IllegalStateException("bot.find() завершился с ошибкой: " + result);
-        }
-        if (isAddrUnset()) {
-            throw new IllegalStateException(LUA_NOT_FOUND_MESSAGE);
-        }
-        log.info("Бот готов: {}", page.evaluate("() => JSON.stringify(bot.state())"));
-    }
-
-    private Object evaluate(String expression) {
-        return page.evaluate(expression);
-    }
-
-    // ------------------------------------------------------------------
-    // Инфраструктура
-    // ------------------------------------------------------------------
-
-    private <T> T onPlaywrightThread(Callable<T> task) {
-        return onPlaywrightThread(0, task);
-    }
-
-    /**
-     * Выполняет задачу в потоке Playwright. {@code timeoutMs > 0} — жёсткий предел
-     * ожидания: если игра не отвечает (вкладка заморожена), не висим, а прерываем задачу
-     * и возвращаем понятную ошибку.
-     */
-    private <T> T onPlaywrightThread(long timeoutMs, Callable<T> task) {
-        Future<T> future = playwrightThread.submit(task);
-        try {
-            return timeoutMs > 0
-                    ? future.get(timeoutMs, TimeUnit.MILLISECONDS)
-                    : future.get();
-        } catch (TimeoutException e) {
-            future.cancel(true);
-            log.error("Операция в игре не уложилась в {} мс — прерываю и переподключаюсь", timeoutMs);
-            forgetPage();
-            throw new IllegalStateException(NO_RESPONSE_MESSAGE, e);
-        } catch (InterruptedException e) {
-            future.cancel(true);
-            Thread.currentThread().interrupt();
-            throw new IllegalStateException("Операция прервана", e);
-        } catch (ExecutionException e) {
-            Throwable cause = e.getCause();
-            if (cause instanceof RuntimeException runtimeException) {
-                throw runtimeException;
-            }
-            throw new IllegalStateException(cause);
-        }
-    }
-
-    private static void sleep(long millis) {
-        try {
-            Thread.sleep(millis);
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-            throw new IllegalStateException("Операция прервана", e);
-        }
-    }
-
-    private static String readResource(String name) {
-        try (InputStream in = GameBridge.class.getClassLoader().getResourceAsStream(name)) {
-            if (in == null) {
-                throw new IllegalStateException("Не найден ресурс " + name + " в classpath");
-            }
-            return new String(in.readAllBytes(), StandardCharsets.UTF_8);
-        } catch (IOException e) {
-            throw new IllegalStateException("Не удалось прочитать ресурс " + name, e);
-        }
-    }
-
-    private static List<String> readResourceLines(String name) {
-        return readResource(name).lines()
-                .map(String::strip)
-                .filter(line -> !line.isEmpty())
-                .toList();
-    }
-
-    /** Результат подготовки Lua-модулей: очищенный/сжатый код и статистика. */
-    record LuaModulesPrepared(int files, int originalBytes, int compressedBytes, List<String> chunks) {}
-
-    /** Собирает строки Lua-подготовки: старые однострочники + новые многострочные lua/*.lua (чанками) + версия. */
-    private List<String> readLuaSetupLines() {
-        List<String> lines = new ArrayList<>(readResourceLines("lua-setup.txt"));
-        LuaModulesPrepared modules = prepareLuaModules(properties.luaDir());
-        if (!modules.chunks().isEmpty()) {
-            log.info("Lua-модули: {} файлов, {} кусков (до сжатия {} байт, после {} байт)",
-                    modules.files(), modules.chunks().size(), modules.originalBytes(), modules.compressedBytes());
-            for (String chunk : modules.chunks()) {
-                lines.add("/run _L=(_L or \"\")..[==[" + chunk + "]==]");
-            }
-            lines.add("/run local f,e=loadstring(_L) _L=nil if f then f() else print(\"LUA ERR\",e) end");
-        }
-        lines.add("/run B[30]=" + luaVersion());
-        return List.copyOf(lines);
-    }
-
-    /** Читает, сжимает и нарезает Lua-модули. */
-    private LuaModulesPrepared prepareLuaModules(String dir) {
-        List<String> modules = readLuaModuleNames(dir);
-        String combined = readLuaModulesCombined(dir);
-        if (combined.isEmpty()) {
-            return new LuaModulesPrepared(modules.size(), 0, 0, List.of());
-        }
-        if (combined.indexOf('|') >= 0) {
-            throw new IllegalStateException("В Lua-исходниках найден символ '|': он экранируется чатом WoW, используй 'or' или string.char(124)");
-        }
-        int originalBytes = combined.getBytes(StandardCharsets.UTF_8).length;
-        String compressed = compressLua(combined);
-        if (compressed.isEmpty()) {
-            return new LuaModulesPrepared(modules.size(), originalBytes, 0, List.of());
-        }
-        compressed.codePoints().forEach(cp -> {
-            if (cp > 127) {
-                throw new IllegalStateException(
-                        "Lua-исходник содержит не-ASCII символы (U+" + cp + "): отправка в чат WoW разрешена только для чистого ASCII");
-            }
-        });
-        List<String> chunks = new ArrayList<>();
-        for (int i = 0; i < compressed.length(); ) {
-            int end = Math.min(i + LUA_CHUNK_SIZE, compressed.length());
-            chunks.add(compressed.substring(i, end));
-            i = end;
-        }
-        int compressedBytes = compressed.getBytes(StandardCharsets.UTF_8).length;
-        return new LuaModulesPrepared(modules.size(), originalBytes, compressedBytes, chunks);
-    }
-
-    /**
-     * Чистит Lua-исходник под отправку одной строки в чат WoW: снимает комментарии,
-     * сжимает пробелы и убирает пробелы вокруг операторов/разделителей вне строковых
-     * литералов "..." и '...', затем режет на куски.
-     */
-    static List<String> splitLuaChunks(String source) {
-        String cleaned = compressLua(source);
-        if (cleaned.isEmpty()) return List.of();
-        cleaned.codePoints().forEach(cp -> {
-            if (cp > 127) {
-                throw new IllegalStateException(
-                        "Lua-исходник содержит не-ASCII символы (U+" + cp + "): отправка в чат WoW разрешена только для чистого ASCII");
-            }
-        });
-        List<String> chunks = new ArrayList<>();
-        for (int i = 0; i < cleaned.length(); ) {
-            int end = Math.min(i + LUA_CHUNK_SIZE, cleaned.length());
-            chunks.add(cleaned.substring(i, end));
-            i = end;
-        }
-        return chunks;
-    }
-
-    /**
-     * Удаляет комментарии, схлопывает пробельные последовательности в один пробел и убирает
-     * пробелы вокруг = , ( ) { } [ ] + - * / < > ~ только вне строковых литералов "..." и '...'.
-     * Не создаёт вне строк последовательности "--", "[[" и "]]", которых не было в исходнике.
-     */
-    static String compressLua(String source) {
-        if (source == null || source.isEmpty()) {
-            return "";
-        }
-        StringBuilder sb = new StringBuilder(source.length());
-        char stringQuote = 0;
-        boolean escaped = false;
-        int len = source.length();
-        for (int i = 0; i < len; i++) {
-            char c = source.charAt(i);
-            if (stringQuote != 0) {
-                sb.append(c);
-                if (escaped) {
-                    escaped = false;
-                } else if (c == '\\') {
-                    escaped = true;
-                } else if (c == stringQuote) {
-                    stringQuote = 0;
-                }
-                continue;
-            }
-            if (c == '"' || c == '\'') {
-                stringQuote = c;
-                sb.append(c);
-                continue;
-            }
-            if (c == '-' && i + 1 < len && source.charAt(i + 1) == '-') {
-                // однострочный комментарий (вне строки) — пропускаем до конца строки
-                while (i < len && source.charAt(i) != '\n' && source.charAt(i) != '\r') {
-                    i++;
-                }
-                if (i < len && sb.length() > 0 && sb.charAt(sb.length() - 1) != ' ') {
-                    sb.append(' ');
-                }
-                continue;
-            }
-            if (Character.isWhitespace(c)) {
-                if (sb.length() > 0 && sb.charAt(sb.length() - 1) != ' ') {
-                    sb.append(' ');
-                }
-                continue;
-            }
-            sb.append(c);
-        }
-        // убираем пробелы вокруг символов (вне строк)
-        return minifySpacesOutsideStrings(sb.toString().trim());
-    }
-
-    private static boolean isTightChar(char c) {
-        return "=,(){}[]+-*/<>~".indexOf(c) >= 0;
-    }
-
-    private static boolean wouldCreateForbiddenPair(char prevC, char nextC) {
-        return (prevC == '-' && nextC == '-')
-                || (prevC == '[' && nextC == '[')
-                || (prevC == ']' && nextC == ']');
-    }
-
-    private static String minifySpacesOutsideStrings(String s) {
-        StringBuilder out = new StringBuilder(s.length());
-        char stringQuote = 0;
-        boolean escaped = false;
-        for (int i = 0; i < s.length(); i++) {
-            char c = s.charAt(i);
-            if (stringQuote != 0) {
-                out.append(c);
-                if (escaped) {
-                    escaped = false;
-                } else if (c == '\\') {
-                    escaped = true;
-                } else if (c == stringQuote) {
-                    stringQuote = 0;
-                }
-                continue;
-            }
-            if (c == '"' || c == '\'') {
-                stringQuote = c;
-                out.append(c);
-                continue;
-            }
-            if (c == ' ') {
-                int prev = out.length() - 1;
-                char prevC = prev >= 0 ? out.charAt(prev) : 0;
-                int j = i + 1;
-                while (j < s.length() && s.charAt(j) == ' ') j++;
-                char nextC = j < s.length() ? s.charAt(j) : 0;
-
-                // не создаём "--", "[[", "]]" там, где их не было
-                if (prev >= 0 && j < s.length() && wouldCreateForbiddenPair(prevC, nextC)) {
-                    if (prevC != ' ') {
-                        out.append(' ');
-                    }
-                    i = j - 1;
-                    continue;
-                }
-
-                // пропускаем пробел, если до него tight-символ
-                if (prev >= 0 && isTightChar(prevC)) {
-                    i = j - 1;
-                    continue;
-                }
-                // пропускаем пробел, если после него tight-символ
-                if (j < s.length() && isTightChar(nextC)) {
-                    i = j - 1; // следующий шаг обработает tight-символ, пробелы съедены
-                    continue;
-                }
-                // схлопнутый одиночный пробел между токенами
-                if (prev >= 0 && prevC != ' ') {
-                    out.append(' ');
-                }
-                i = j - 1;
-                continue;
-            }
-            out.append(c);
-        }
-        // финальный trim возможных хвостовых пробелов
-        int end = out.length();
-        while (end > 0 && out.charAt(end - 1) == ' ') end--;
-        out.setLength(end);
-        return out.toString();
-    }
-
-    /** Конкатенирует содержимое lua-модулей (classpath или диск). */
-    private String readLuaModulesCombined(String dir) {
-        List<String> modules = readLuaModuleNames(dir);
-        StringBuilder sb = new StringBuilder();
-        for (String module : modules) {
-            if (module.contains("..") || module.contains("/") || module.contains("\\")) {
-                throw new IllegalStateException("Недопустимое имя модуля в lua/manifest.txt: " + module);
-            }
-            String source = (dir == null)
-                    ? readResource("lua/" + module)
-                    : readFile(Path.of(dir, module));
-            if (!sb.isEmpty()) {
-                sb.append("\n");
-            }
-            sb.append(source);
-        }
-        return sb.toString();
-    }
-
-    /** Список имён lua-модулей из manifest.txt (classpath или диск). Если манифеста нет — пустой список. */
-    private List<String> readLuaModuleNames(String dir) {
-        String manifest;
-        try {
-            manifest = (dir == null)
-                    ? readResource("lua/manifest.txt")
-                    : readFile(Path.of(dir, "manifest.txt"));
-        } catch (RuntimeException e) {
-            return List.of();
-        }
-        return manifest.lines()
-                .map(String::strip)
-                .filter(line -> !line.isEmpty() && !line.startsWith("#"))
-                .toList();
-    }
-
-    /** Хеш всех Lua-источников (lua-setup.txt + lua/*.lua). */
-    private int luaVersion() {
-        StringBuilder sb = new StringBuilder(readResource("lua-setup.txt"));
-        sb.append(readLuaModulesCombined(properties.luaDir()));
-        return sb.toString().hashCode() & 0xFFFFF;
-    }
-
-    @PreDestroy
-    @Override
-    public void close() {
-        try {
-            onPlaywrightThread(() -> {
-                forgetPage();
-                if (playwright != null) {
-                    // Закрывает только драйвер Playwright, Chrome пользователя остаётся открытым.
-                    playwright.close();
-                    playwright = null;
-                }
-                return null;
-            });
-        } catch (RuntimeException e) {
-            log.debug("Ошибка при остановке Playwright: {}", e.getMessage());
-        } finally {
-            playwrightThread.shutdownNow();
         }
     }
 }
