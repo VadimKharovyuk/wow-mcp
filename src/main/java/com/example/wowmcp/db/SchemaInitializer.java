@@ -101,5 +101,27 @@ final class SchemaInitializer {
                 CREATE TABLE IF NOT EXISTS keep_item (
                   item_id int PRIMARY KEY
                 )""");
+        // именованные места и маршруты (задание 11); route мог быть создан вручную раньше — только добавляем
+        jdbc.execute("""
+                CREATE TABLE IF NOT EXISTS place (
+                  name       text PRIMARY KEY,
+                  zone       int         NOT NULL,
+                  x          real        NOT NULL,
+                  y          real        NOT NULL,
+                  note       text,
+                  created_at timestamptz NOT NULL DEFAULT now()
+                )""");
+        jdbc.execute("""
+                INSERT INTO place (name, zone, x, y) VALUES
+                  ('перекресток', 117, 51.8, 30.3),
+                  ('лагерь таурахо', 117, 45.0, 58.9),
+                  ('гарпии', 117, 40.9, 17.0)
+                ON CONFLICT (name) DO NOTHING""");
+        jdbc.execute("""
+                CREATE TABLE IF NOT EXISTS route (
+                  name       text PRIMARY KEY,
+                  session_id varchar(40) NOT NULL
+                )""");
+        jdbc.execute("ALTER TABLE route ADD COLUMN IF NOT EXISTS created_at timestamptz DEFAULT now()");
     }
 }

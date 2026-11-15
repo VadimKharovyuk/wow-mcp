@@ -39,7 +39,7 @@
 | 6 | `OPENCODE_TASK_6_COMBAT.md` | Код готов (все 17 пунктов, см. `docs/plans/TASK6_PLAN.md`), **ждёт проверки в игре** и перезапуска сервера (изменён `lua-setup.txt`) |
 | 7 | `docs/tasks/OPENCODE_TASK_7_DEATH.md` | Код готов, **ждёт проверки в игре** и перезапуска сервера (новый `lua/death.lua`): таблица D, `80-death.js` (`revive`), `autoRevive` в гринде, защита «3 смерти за 10 мин», инструмент `revive`, поля `dead`/`ghost` в `get_state` |
 | 8 | `OPENCODE_TASK_8_HUNTER.md` | Код готов, **ждёт проверки в игре**. Части 2, 3, 4б были сделаны вручную; добавлено: вызов питомца (`ensurePet`, клавиша `petCallKey`), пауза гринда при мёртвом питомце (статус `paused`), боеприпасы (`D[10]`, остановка при 0, предупреждение < 200), подход стрелка до дальности выстрела, поля `petExists`/`petHpPct`/`petDead`/`ammo` в `get_state`. Отход по спецификации (замедление, ожидание питомца 1.5 с) не менялся: действует ручная логика «отходить, когда моба держит питомец» |
-| 11 | `OPENCODE_TASK_11_PLACES.md` | Не начато |
+| 11 | `OPENCODE_TASK_11_PLACES.md` | Код готов, **ждёт проверки в игре**: таблицы `place`/`route` (создаются при старте, места-«семена» добавлены), `PlaceTools` (`remember_place`, `places`, `go_place`, `routes`, `go_route`), `record_stop(name)`, `RoutePlanner` (прореживание, направление «от меня», старт с ближайшей точки), `90-route.js` (`goRoute`, пропуск застрявших точек), поле `route` в `get_state` |
 | 9 | `docs/tasks/OPENCODE_TASK_9_HUNT.md` | Не начато |
 | 10 | `OPENCODE_TASK_10_ROADS.md` | Не начато |
 

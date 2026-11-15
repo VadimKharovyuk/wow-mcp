@@ -330,6 +330,6 @@ window.bot = {
   },
   report() {
     const s = this.state();
-    return JSON.stringify({ job: this.job, hpPct: Math.round(s.hp / s.hpMax * 100), ...s, grind: this.grindStats || null });
+    return JSON.stringify({ job: this.job, hpPct: Math.round(s.hp / s.hpMax * 100), ...s, grind: this.grindStats || null, route: this.routeProgress || null });
   }
 };
