@@ -191,7 +191,7 @@ Object.assign(bot, {
         await sleep(60);
         this.mouse(f.point[0], f.point[1], 'mouseup', 2);
         const t0 = Date.now();
-        while (Date.now() - t0 < 1300) {                // ждём торговца или беседу, которая станет окном
+        while (Date.now() - t0 < 2000) {                // ждём торговца или беседу, которая станет окном (повторный клик переоткрыл бы окно)
           await sleep(200);
           if (this.bags().merchantOpen === 1) { opened = true; break; }
           if (this.state().fight) break;
@@ -219,10 +219,17 @@ Object.assign(bot, {
       await sleep(400);
       const b = this.bags();
       if (b.merchantOpen === 0 && b.toSell === 0) break;
+      if (b.toSell === 0 && Date.now() - t1 > 2500) break;   // всё продано, а окно Lua не закрыл — закроем ниже
       if (this.state().fight) {
         const fr = await this.fight();
         if (fr.result !== 'бой окончен') return { result: 'бой: ' + fr.result, ...fr };
       }
+    }
+
+    // окно могло остаться открытым (Lua не закрыл, или лишний клик переоткрыл) — закрываем сами
+    if (this.bags().merchantOpen === 1) {
+      try { await chat('/run CloseMerchant()'); } catch (e) { /* чат недоступен — не критично */ }
+      await sleep(300);
     }
 
     // 6) результат — по фактической продаже (счётчик I[8] и деньги), а не по скану
