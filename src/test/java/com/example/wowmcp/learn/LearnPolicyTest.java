@@ -24,6 +24,7 @@ class LearnPolicyTest {
         assertThat(policy.isExcluded(LearnPolicy.nameHash("Атака"))).isTrue();
         assertThat(policy.isExcluded(LearnPolicy.nameHash("Кормление питомца"))).isTrue();
         assertThat(policy.isExcluded(1635767960)).isTrue();                       // Лечение питомца
+        assertThat(policy.isExcluded(LearnPolicy.nameHash("Замораживающая ловушка"))).isTrue();
         assertThat(policy.isExcluded(1278643508)).isFalse();                      // Чародейский выстрел
         assertThat(policy.isExcluded(null)).isFalse();
     }

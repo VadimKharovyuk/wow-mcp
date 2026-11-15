@@ -15,6 +15,9 @@ Object.assign(bot, {
   combatCfg() {
     const C = {
       hunter: { ranged: true, petCallKey: '6' /* Призыв питомца */, minAmmo: 200,
+                // Замораживающая ловушка (аварийная): HP ниже trapBelowHpPct, моб вплотную и бьёт охотника — поставить
+                // и пятиться. Пока ловушки нет в панели умений (не выучена), правило молча пропускается.
+                trapSpell: 197174967 /* Замораживающая ловушка */, trapBelowHpPct: 0.7,
                 shootSpell: 1278643508 /* Чародейский выстрел */,
                 meleeSpell: 1704697426 /* Удар ящера */, beastsOnly: true,
                 // Закреплённая ротация: используется вместо выученной (автообучение пока учит
@@ -101,7 +104,8 @@ Object.assign(bot, {
     this.running = true;
     const t0 = Date.now(), fightStart = t0;
     let lastPress = 0, handledErr = 0, turns = 0, retreats = 0, lastRetreat = 0, deadSince = 0;
-    let noAttackSince = 0, hpAtNoAttack = 0, lastSwitch = 0;
+    let noAttackSince = 0, hpAtNoAttack = 0, lastSwitch = 0, trapAt = 0;
+    const hpHist = [];
     this.fightMobs = 1;
     const cc = this.combatCfg();
     while (this.running) {
@@ -167,6 +171,34 @@ Object.assign(bot, {
         const inDeadZone = cc && cc.ranged && this.spellInRange(cc.meleeSpell) === 1;
         if (s.err === 2 && !inDeadZone && now - this.lastHealCastAt() > HEAL_CAST_LOCK_MS) {
           await this.hold('W', 500); continue;                                           // подойти ближе
+        }
+      }
+
+      // Замораживающая ловушка. HP охотника ниже trapBelowHpPct, и его реально бьют (HP упало ≥ 3% за 2 с):
+      //  а) цель держит питомец (она на нём), а охотника бьёт ДРУГОЙ моб — ставим ловушку под ноги (замораживает
+      //     соседа, который бьёт нас) и продолжаем бить ту же цель: не отходим и не переключаем цель;
+      //  б) цель сама бьёт охотника вплотную — ловушка под ноги, затем пара шагов назад.
+      // Лёд снимается любым уроном по мобу, поэтому по замороженному не стреляем (цель в случае «а» — другая).
+      // Пока ловушки нет в панели умений (не выучена), правило молча пропускается.
+      hpHist.push([now, hpPct]);
+      while (hpHist.length && now - hpHist[0][0] > 2000) hpHist.shift();
+      const recentDrop = Math.max(...hpHist.map(h => h[1])) - hpPct;
+      if (cc && cc.trapSpell && s.fight && hpPct < (cc.trapBelowHpPct || 0.7) && recentDrop >= 0.03
+          && now - trapAt > 30000 && (this.failedUntil[cc.trapSpell] || 0) <= now) {
+        const rec = spellRec(cc.trapSpell), pt = this.pet();
+        const otherAttacks = !!pt && pt.ttPet && !pt.ttPlayer;                              // случай «а»
+        const targetAttacks = this.spellInRange(cc.meleeSpell) === 1 && (!pt || pt.ttPlayer);   // случай «б»
+        if (rec && rec.ready === 1 && (otherAttacks || targetAttacks)) {
+          trapAt = now;
+          if (await this.pressSpell(cc.trapSpell)) {
+            this.pressLog[cc.trapSpell] = Date.now(); this.pressGT[cc.trapSpell] = s.time;
+            this.warnings.push('ловушка: HP ' + Math.round(hpPct * 100) + '%, ' +
+                (otherAttacks ? 'бьёт другой моб, цель прежняя' : 'цель вплотную'));
+            if (this.warnings.length > 20) this.warnings.shift();
+            await sleep(700);                                  // ловушка срабатывает на соседнем мобе
+            if (!otherAttacks) await this.retreat(1200);       // «б»: отойти; «а»: стоим и бьём цель дальше
+          }
+          continue;
         }
       }
 
