@@ -36,7 +36,7 @@
 ## Задания для OpenCode (порядок из CLAUDE_TASK.md, раздел 4)
 | № | Файл | Статус |
 |---|---|---|
-| 6 | `OPENCODE_TASK_6_COMBAT.md` | В работе: пункты 13–15, 17 закрыты, 16 почти; см. `docs/plans/TASK6_PLAN.md` |
+| 6 | `OPENCODE_TASK_6_COMBAT.md` | Код готов (все 17 пунктов, см. `docs/plans/TASK6_PLAN.md`), **ждёт проверки в игре** и перезапуска сервера (изменён `lua-setup.txt`) |
 | 7 | `docs/tasks/OPENCODE_TASK_7_DEATH.md` | Не начато |
 | 8 | `OPENCODE_TASK_8_HUNTER.md` | Не начато (части 2, 3, 4б сделаны вручную) |
 | 11 | `OPENCODE_TASK_11_PLACES.md` | Не начато |

@@ -6,23 +6,38 @@ Object.assign(bot, {
       for (let fx = 0.25; fx <= 0.75; fx += 0.04) pts.push([fx, fy]);
     pts.sort((a, b) => Math.hypot(a[0] - 0.5, a[1] - 0.7) - Math.hypot(b[0] - 0.5, b[1] - 0.7));
 
-    for (const [fx, fy] of pts) {
-      if (!this.running && this.job.status !== 'running') break;
-      this.mouse(fx, fy, 'mousemove');
-      await sleep(70);
-      if (this.state().moDead) {
-        this.mouse(fx, fy, 'mousedown', 2); await sleep(60); this.mouse(fx, fy, 'mouseup', 2);
-        const t0 = Date.now();
-        while (Date.now() - t0 < timeout) {          // ждём: подбежал, окно открылось и закрылось
-          await sleep(400);
+    let scanned = 0, sawDead = false;
+    for (let pass = 0; pass < 2; pass++) {       // одна повторная попытка скана
+      for (const [fx, fy] of pts) {
+        if (!this.running && this.job.status !== 'running') break;
+        this.mouse(fx, fy, 'mousemove');
+        await sleep(70); scanned++;
+        if (this.state().moDead) {
+          sawDead = true;
+          this.mouse(fx, fy, 'mousedown', 2); await sleep(60); this.mouse(fx, fy, 'mouseup', 2);
+          const t0 = Date.now();
+          while (Date.now() - t0 < timeout) {          // ждём: подбежал, окно открылось и закрылось
+            await sleep(400);
+            const s = this.state();
+            if (s.fight) return { result: 'бой во время сбора', ...s };
+            if (Date.now() - t0 > 1500 && s.lootN === 0) return { result: 'добыча собрана', point: [fx, fy], ...s };
+          }
           const s = this.state();
-          if (s.fight) return { result: 'бой во время сбора', ...s };
-          if (Date.now() - t0 > 1500 && s.lootN === 0) return { result: 'добыча собрана', point: [fx, fy], ...s };
+          return { result: s.lootN > 0 ? 'окно добычи не закрылось (сумки полные?)' : 'не удалось открыть труп', ...s };
         }
-        const s = this.state();
-        return { result: s.lootN > 0 ? 'окно добычи не закрылось (сумки полные?)' : 'не удалось открыть труп', ...s };
+      }
+      if (!this.running && this.job.status !== 'running') break;   // остановили — вторую попытку не делаем
+      if (pass === 0) {
+        await sleep(500);                       // труп мог ещё не лечь / курсор не обновился
+        const f = this.state();
+        if (f.fight) return { result: 'бой во время сбора', ...f };
       }
     }
-    return { result: 'труп не найден под курсором', ...this.state() };
+    const s = this.state();
+    const info = { scanned, moDeadSeen: sawDead, targetDead: !!s.target && s.targetHp === 0, tDist: s.tDist, lootN: s.lootN };
+    console.warn('лут: труп не найден', info);
+    this.warnings.push('лут: труп не найден ' + JSON.stringify(info));
+    if (this.warnings.length > 20) this.warnings.shift();
+    return { result: 'труп не найден под курсором', loot: info, ...s };
   }
 });

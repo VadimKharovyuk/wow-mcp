@@ -6,7 +6,7 @@ Object.assign(bot, {
     radius: 2.5,        // радиус охоты вокруг стартовой точки (единицы карты)
     minLvlDiff: -5,     // не трогать мобов слабее (серые — без опыта)
     maxLvlDiff: 2,      // и сильнее себя больше чем на 2 уровня
-    restBelow: 0.6,     // отдыхать, если HP ниже 60%
+    restBelow: 0.7,     // отдыхать (и не начинать новый пулл), если HP ниже 70%
     petRestBelow: 0.5,  // отдыхать (лечить питомца), если HP питомца ниже 50% и в ротации есть его лечение
     manaBelow: 0.3,    // отдыхать, если мана ниже 30%
     pullKey: '3',       // умение для агро издалека
@@ -28,14 +28,16 @@ Object.assign(bot, {
     st.rejects = st.rejects || {}; st.rejects[reason] = (st.rejects[reason] || 0) + 1;
   },
 
-  // null — цель подходит; иначе строка-причина отказа
+  // null — цель подходит; иначе причина отказа (видна в get_state → grind.rejects):
+  // мёртв / нейтральный / игрок / элита/редкий / занят / уровень / не зверь (+ вне радиуса, далеко для выстрела)
   targetProblem(s) {
-    if (!s.target || !s.enemy || s.targetHp === 0) return 'нет цели';
+    if (!s.target) return 'нет цели';
+    if (s.targetHp === 0) return 'мёртв';
+    if (!s.enemy) return 'нейтральный';
     if (s.tFlags & 1) return 'игрок';
     if (s.tFlags & 2) return 'элита/редкий';
-    if (s.tFlags & 4) return 'чужой моб';
-    if (s.tLvl > this.grindCfg.maxLvlDiff) return 'слишком сильный';
-    if (s.tLvl < this.grindCfg.minLvlDiff) return 'слишком слабый';
+    if (s.tFlags & 4) return 'занят';          // кто-то уже бьёт этого моба
+    if (s.tLvl > this.grindCfg.maxLvlDiff || s.tLvl < this.grindCfg.minLvlDiff) return 'уровень';
     const cc = this.combatCfg && this.combatCfg(), p = this.pet && this.pet();
     if (cc && cc.beastsOnly && p && p.exists && !p.tBeast) return 'не зверь';
     return null;
@@ -82,6 +84,16 @@ Object.assign(bot, {
     return null;
   },
 
+  // враждебный моб подходящего уровня ближе ~10 м (tDist & 2): текущая цель или ещё до 2 Tab
+  async nearbyHostile() {
+    const ok = s => !this.targetProblem(s) && (s.tDist & 2);
+    if (ok(this.state())) return true;
+    for (let i = 0; i < 2 && this.grinding; i++) {
+      if (ok(await this.tabTarget())) return true;
+    }
+    return false;
+  },
+
   // питомцу пора на лечение: есть правило лечения питомца, питомец жив, HP низкое, лечение не висит.
   // Не чаще раза в 90 с: если лечение не удаётся, гринд не должен вечно сидеть в отдыхе.
   petNeedsRest(cfg) {
@@ -110,6 +122,7 @@ Object.assign(bot, {
   async fightAndLoot(st) {
     if (!this.grinding) return 'остановлен вручную';   // fight() сам включает running — после stop() не начинать бой
     const f = await this.fight();
+    if (this.dead() || f.hp === 0) return 'dead';
     if (!this.grinding) return 'остановлен вручную';
     if (f.result !== 'бой окончен') return 'бой: ' + f.result;
     st.kills++;
@@ -196,6 +209,19 @@ Object.assign(bot, {
     const cc0 = this.combatCfg && this.combatCfg();
     const scan = !!(cc0 && cc0.ranged);                   // стрелок ищет цели на бегу
     const out = r => { st.laps = this.patrolLaps || 0; this.stop(); return { result: r, stats: st, ...this.state() }; };
+    // смерть: гринд завершается со статусом задачи 'dead'; воскрешение — отдельная задача (revive)
+    const dieOut = () => {
+      const s = this.state(), la = this.lastAlive || {};
+      const death = { x: s.x, y: s.y, zone: s.zone, mobsInFight: this.fightMobs || 0,
+                      hpPctBefore: la.hpPct, manaPctBefore: la.manaPct, pet: la.pet || null, kills: st.kills };
+      console.warn('ПЕРСОНАЖ ПОГИБ', death);
+      this.warnings.push('персонаж погиб: ' + JSON.stringify(death));
+      st.deaths = (st.deaths || 0) + 1;
+      st.laps = this.patrolLaps || 0;
+      this.stop();
+      return { result: 'персонаж погиб', status: 'dead', death, stats: st, ...s };
+    };
+    const fin = p => p === 'dead' ? dieOut() : out(p);   // результат fightAndLoot
 
     if (mode === 'patrol' && !this.patrolRoute.length) {
       return out('patrol: нет мест в пределах maxDistance');
@@ -203,12 +229,13 @@ Object.assign(bot, {
 
     while (this.grinding) {
       const s = this.state();
-      if (s.hp === 0) return out('персонаж погиб');
+      if (this.dead() || s.hp === 0) return dieOut();
+      this.lastAlive = { hpPct: +(s.hp / s.hpMax).toFixed(2), manaPct: s.manaPct, pet: s.pet };
       if (cfg.maxKills && st.kills >= cfg.maxKills) return out('лимит убийств достигнут');
       if (Date.now() - t0 > cfg.maxMinutes * 60000) return out('время вышло');
 
       if (s.fight) {                                        // на нас напали — сначала отбиться
-        const p = await this.fightAndLoot(st); if (p) return out(p); continue;
+        const p = await this.fightAndLoot(st); if (p) return fin(p); continue;
       }
 
       // проверка сумок — работает при любом cfg.loot
@@ -236,6 +263,13 @@ Object.assign(bot, {
       // ушли далеко — назад к центру: в radius это 1.5 радиуса охоты, в patrol — maxDistance
       const farLimit = mode === 'patrol' ? cfg.maxDistance : cfg.radius * 1.5;
       if (Math.hypot(s.x - anchor.x, s.y - anchor.y) > farLimit) {
+        // подходящий враг ближе ~10 м — бьём, а не пропускаем из-за радиуса гринда
+        if (await this.nearbyHostile()) {
+          if (!(await this.approach())) { st.skipped++; await chat('/cleartarget'); continue; }
+          const p = await this.fightAndLoot(st); if (p) return fin(p);
+          continue;
+        }
+        this.noteReject('вне радиуса');
         const m = await this.moveTo(anchor.x, anchor.y);
         if (m.result === 'застрял') return out('застрял по пути к центру');
         continue;
@@ -244,7 +278,7 @@ Object.assign(bot, {
       // на бегу уже выбрали подходящую цель (moveTo вернул 'цель') — начать бой отсюда, издалека
       if (scan && this.goodPullTarget(this.state())) {
         if (!(await this.approach())) { st.skipped++; await chat('/cleartarget'); continue; }
-        const p = await this.fightAndLoot(st); if (p) return out(p);
+        const p = await this.fightAndLoot(st); if (p) return fin(p);
         continue;
       }
 
@@ -261,7 +295,7 @@ Object.assign(bot, {
         if (t2) {
           st.spotHits++;
           if (!(await this.approach())) { st.skipped++; await chat('/cleartarget'); }
-          else { const p = await this.fightAndLoot(st); if (p) return out(p); }
+          else { const p = await this.fightAndLoot(st); if (p) return fin(p); }
         } else {
           spot.empty++;
         }
@@ -274,7 +308,7 @@ Object.assign(bot, {
       if (!this.grinding) break;
       if (tgt) {
         if (!(await this.approach())) { st.skipped++; await chat('/cleartarget'); continue; }
-        const p = await this.fightAndLoot(st); if (p) return out(p);
+        const p = await this.fightAndLoot(st); if (p) return fin(p);
         continue;
       }
 
@@ -289,7 +323,7 @@ Object.assign(bot, {
           if (t2) {
             st.spotHits++;
             if (!(await this.approach())) { st.skipped++; await chat('/cleartarget'); }
-            else { const p = await this.fightAndLoot(st); if (p) return out(p); }
+            else { const p = await this.fightAndLoot(st); if (p) return fin(p); }
           } else {
             spot.empty++;
           }
