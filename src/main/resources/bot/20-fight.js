@@ -69,6 +69,25 @@ Object.assign(bot, {
     return t;
   },
 
+  // почему нажатие не сработало: последняя ошибка интерфейса после нажатия (B[14]) или мана
+  failReason(s, pressGT) {
+    if (pressGT != null && s.errTime > pressGT) {
+      return s.err === 1 ? 'не лицом к цели' : s.err === 2 ? 'слишком далеко' : 'другая ошибка игры';
+    }
+    if (s.manaPct < 0.1) return 'нет маны';
+    return 'нет реакции (прервано, нельзя применить или клавиша не принята)';
+  },
+
+  // нас бьёт моб, который не текущая цель: Tab по кругу, пока цель не будет «целиться в игрока» (Q[8])
+  async switchToAttacker() {
+    for (let i = 0; i < 4 && this.running; i++) {
+      const s = await this.tabTarget();
+      const p = this.pet();
+      if (s.target && s.enemy && s.targetHp > 0 && p && p.ttPlayer) return true;
+    }
+    return false;
+  },
+
   // питомцу нужно лечение: есть, жив, HP ниже порога и лечение на нём ещё не висит (HoT 15 с)
   petNeedsHeal(below) {
     const p = this.pet();
@@ -79,6 +98,8 @@ Object.assign(bot, {
     this.running = true;
     const t0 = Date.now(), fightStart = t0;
     let lastPress = 0, handledErr = 0, turns = 0, retreats = 0, lastRetreat = 0, deadSince = 0;
+    let noAttackSince = 0, hpAtNoAttack = 0, lastSwitch = 0;
+    this.fightMobs = 1;
     const cc = this.combatCfg();
     while (this.running) {
       const s = this.state(), hpPct = s.hp / s.hpMax;
@@ -88,11 +109,51 @@ Object.assign(bot, {
 
       if (!s.target || !s.enemy || s.targetHp === 0) { await this.tabTarget(); continue; }
 
+      // Цель не бьёт ни игрока, ни питомца ≥ 2 с, а HP игрока падает — бьёт кто-то другой: переключиться
+      const pp = this.pet();
+      if (pp && s.fight && s.target && s.enemy && s.targetHp > 0 && !pp.ttPlayer && !pp.ttPet) {
+        if (!noAttackSince) { noAttackSince = Date.now(); hpAtNoAttack = hpPct; }
+        else if (Date.now() - noAttackSince >= 2000 && hpPct < hpAtNoAttack - 0.03 && Date.now() - lastSwitch > 3000) {
+          lastSwitch = Date.now(); noAttackSince = 0;
+          if (await this.switchToAttacker()) {
+            this.fightMobs++;
+            this.warnings.push('переключился на моба, который бьёт нас');
+            if (this.warnings.length > 20) this.warnings.shift();
+          }
+          continue;
+        }
+      } else noAttackSince = 0;
+
       const isReadyKey = k => (s.ready >> (+k - 1)) & 1;
       const spellRec = h => (this.spells() || []).find(r => r.nameHash === h);
       const now = Date.now();
       this.lastKey = this.lastKey || {};
       this.lastSpellAt = this.lastSpellAt || {};
+
+      // Проверка, что нажатие сработало: после удачного применения умение уходит на ГКД/КД (ready=0).
+      // Если за 1.2 с оно так и осталось готовым — нажатие не прошло (клавиша не работает, нельзя применить):
+      // пропускаем это умение 5 с, чтобы оно не блокировало остальные правила.
+      this.pressLog = this.pressLog || {};
+      this.pressGT = this.pressGT || {};
+      const casting = this.casting();
+      this.failedUntil = this.failedUntil || {};
+      this.lastOkAt = this.lastOkAt || {};
+      for (const h in this.pressLog) {
+        const rec = spellRec(+h), at = this.pressLog[h];
+        // идёт каст — нажатие сработало (долгое заклинание: ГКД 1.5 с кончается раньше каста 2.5 с,
+        // и умение снова «готово», хотя уже читается)
+        if (!rec || rec.ready === 0 || casting) { this.lastOkAt[h] = now; delete this.pressLog[h]; delete this.pressGT[h]; continue; }
+        if (now - at > 1200) {
+          this.failedUntil[h] = now + 5000;
+          const why = this.failReason(s, this.pressGT[h]);
+          delete this.pressLog[h]; delete this.pressGT[h];
+          this.warnings.push('нажатие не сработало: ' + h + ' (клавиша ' + rec.keyCode + '): ' + why);
+          if (this.warnings.length > 20) this.warnings.shift();
+        }
+      }
+
+      // Пока идёт каст/канал — никакие клавиши не жмём и не двигаемся (макрос 9 и ходьба прервали бы чтение лечения)
+      if (casting) { await sleep(100); continue; }
 
       // реакция на свежую ошибку, случившуюся после нашего нажатия
       if (s.errTime > lastPress && s.errTime > handledErr) {
@@ -123,22 +184,6 @@ Object.assign(bot, {
         }
       }
 
-      // Проверка, что нажатие сработало: после удачного применения умение уходит на ГКД/КД (ready=0).
-      // Если за 1.2 с оно так и осталось готовым — нажатие не прошло (клавиша не работает, нельзя применить):
-      // пропускаем это умение 5 с, чтобы оно не блокировало остальные правила.
-      this.pressLog = this.pressLog || {};
-      this.failedUntil = this.failedUntil || {};
-      this.lastOkAt = this.lastOkAt || {};
-      for (const h in this.pressLog) {
-        const rec = spellRec(+h), at = this.pressLog[h];
-        if (!rec || rec.ready === 0) { this.lastOkAt[h] = now; delete this.pressLog[h]; continue; }
-        if (now - at > 1200) {
-          this.failedUntil[h] = now + 5000; delete this.pressLog[h];
-          this.warnings.push('нажатие не сработало: ' + h + ' (клавиша ' + rec.keyCode + ')');
-          if (this.warnings.length > 20) this.warnings.shift();
-        }
-      }
-
       let pick = null;
       for (const r of this.activeRotation()) {
         // --- v2: заклинание по хешу названия ---
@@ -158,7 +203,7 @@ Object.assign(bot, {
           if (r.outOfCombatOnly && s.fight) continue;
           if (r.waitAfter) {
             const ref = r.waitAfter.spell ? (this.lastSpellAt[r.waitAfter.spell] || 0) : (this.lastKey[r.waitAfter.key] || 0);
-            if (now - ref < (r.waitAfter.ms || 0)) { pick = 'wait'; break; }
+            if (now - ref < (r.waitAfter.ms || 0)) continue;   // ещё рано — к следующему правилу
           }
           pick = r; break;
         }
@@ -169,13 +214,13 @@ Object.assign(bot, {
         if (r.outOfCombatOnly && s.fight) continue;
         if (r.waitAfter) {
           const ref = r.waitAfter.spell ? (this.lastSpellAt[r.waitAfter.spell] || 0) : (this.lastKey[r.waitAfter.key] || 0);
-          if (now - ref < (r.waitAfter.ms || 0)) { pick = 'wait'; break; }
+          if (now - ref < (r.waitAfter.ms || 0)) continue;   // ещё рано — к следующему правилу
         }
         pick = r; break;
       }
-      if (pick && pick !== 'wait') {
+      if (pick) {
         if (pick.spell) {
-          if (await this.pressSpell(pick.spell) && !this.pressLog[pick.spell]) this.pressLog[pick.spell] = Date.now();
+          if (await this.pressSpell(pick.spell) && !this.pressLog[pick.spell]) { this.pressLog[pick.spell] = Date.now(); this.pressGT[pick.spell] = s.time; }
         } else {
           await this.tap(pick.key);
           this.lastKey[pick.key] = Date.now();
