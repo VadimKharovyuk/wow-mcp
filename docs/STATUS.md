@@ -43,6 +43,15 @@
 | 9 | `docs/tasks/OPENCODE_TASK_9_HUNT.md` | Код готов, **ждёт проверки в игре и БД**: `hunt` (`HuntTools`, `HuntRepository`, таблица `hunt_cluster_stat`), `95-hunt.js`, `findByName` (`/target имя`) в `grind` и `hunt`, события `hunt` → `EventCollector`, поле `hunt` и `grind.byName` в `get_state`. Нужны `mob_spawn`, `zone_map`, `mob_cluster` в БД (импортирует игрок; запросы написаны по описанию в задании, на реальной БД не запускались). Файл `Opencode_task_9_hunt.md` в корне — по ошибке копия задания 8, актуален `docs/tasks/OPENCODE_TASK_9_HUNT.md` |
 | 10 | `OPENCODE_TASK_10_ROADS.md` | Код готов, **ждёт проверки в игре и БД**: постоянная запись пути (`path_point.source` = player/bot/manual, `trackAutoPath` в `60-track.js`), таблицы `road_node`/`road_edge`, `RoadGraphBuilder` (шаг 0.8, слияние 0.6, бот без остановок > 3 с), A* (`RoadGraph`), `RoadService` (маршрут, обучение, чистка точек бота > 7 дней), `build_roads`, `go_to`/`move_to` с `useRoads`, `go_place` через `Navigator`. Ограничения: при застревании на ребре бот идёт прямо к цели (повторного A* без ребра нет); `route(from,to)` — внутренний метод `RoadService.plan`, не MCP-инструмент |
 
+## Статистика и дашборд (15.11)
+- wow-mcp пишет в БД: `bot_job` (запуски задач со сводкой), `game_event` (jsonb: `loot` по LOOT_OPENED — бот и игрок,
+  `lootmiss`, `death`, `sell`, `stat` — снимки опыта/уровня/денег), `mob_kill.job_uid`. Lua: `D[11]` счётчик окон добычи,
+  `D[12]`/`D[13]` опыт.
+- `dashboard/` — отдельный Spring Boot (порт 8085, только чтение): API `/api/summary|timeline|progress|jobs|spots` и страница
+  с графиками (Chart.js). SQL проверен на тестовых данных; на вашей базе и с реальными событиями не запускался.
+- Ограничение: данные вашей игры без бота пишутся, только пока работает сервер wow-mcp. Полная запись потребует отдельного
+  сборщика (не сделано).
+
 ## Как проверять изменения бота
 JS: `node --check` для каждого `bot/*.js`, затем в игре «перезагрузи бота». Java/Lua: `./mvnw -q package`,
 перезапуск сервера (`deploy.sh` запускает только игрок). Версия Lua — хеш `lua-setup.txt` + `lua/*.lua`,

@@ -1,0 +1,121 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>WoW бот: статистика</title>
+<style>
+  :root { --bg:#f6f7f9; --card:#fff; --text:#1c2230; --muted:#6b7385; --line:#e3e6ec; --bot:#2f6fed; --player:#e8912d; --bad:#d6453d; --good:#2a9d5c; }
+  @media (prefers-color-scheme: dark) { :root { --bg:#12151c; --card:#1b2029; --text:#e6e9f0; --muted:#8c95a8; --line:#2a303c; --bot:#6b9bff; --player:#f3a84f; --bad:#ff6b63; --good:#4cc380; } }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--text); font:14px/1.45 system-ui, sans-serif; }
+  header { display:flex; flex-wrap:wrap; gap:12px; align-items:center; justify-content:space-between; padding:16px; }
+  h1 { font-size:18px; margin:0; }
+  select { background:var(--card); color:var(--text); border:1px solid var(--line); border-radius:8px; padding:6px 10px; }
+  main { padding:0 16px 24px; max-width:1200px; margin:0 auto; }
+  .cards { display:grid; grid-template-columns:repeat(auto-fit,minmax(160px,1fr)); gap:12px; margin-bottom:16px; }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:12px; padding:12px 14px; }
+  .card .v { font-size:24px; font-weight:600; }
+  .card .l { color:var(--muted); font-size:12px; }
+  .card .s { color:var(--muted); font-size:12px; margin-top:2px; }
+  .grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(340px,1fr)); gap:12px; margin-bottom:16px; }
+  .panel { background:var(--card); border:1px solid var(--line); border-radius:12px; padding:12px 14px; }
+  .panel h2 { font-size:14px; margin:0 0 8px; }
+  table { width:100%; border-collapse:collapse; font-size:13px; }
+  th, td { text-align:left; padding:5px 6px; border-bottom:1px solid var(--line); white-space:nowrap; }
+  th { color:var(--muted); font-weight:500; }
+  .wrap { overflow-x:auto; }
+  .muted { color:var(--muted); }
+  #err { color:var(--bad); padding:0 16px; }
+  canvas { max-height:260px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>WoW бот: статистика</h1>
+  <label>Период
+    <select id="hours">
+      <option value="1">1 час</option><option value="6">6 часов</option>
+      <option value="24" selected>24 часа</option><option value="168">7 дней</option><option value="720">30 дней</option>
+    </select>
+  </label>
+</header>
+<div id="err"></div>
+<main>
+  <div class="cards" id="cards"></div>
+  <div class="grid">
+    <div class="panel"><h2>Убийства</h2><canvas id="cKills"></canvas></div>
+    <div class="panel"><h2>Опыт</h2><canvas id="cXp"></canvas></div>
+    <div class="panel"><h2>Добыча и смерти</h2><canvas id="cLoot"></canvas></div>
+    <div class="panel"><h2>Карта убийств</h2><canvas id="cSpots"></canvas></div>
+  </div>
+  <div class="panel wrap"><h2>Запуски бота</h2><table id="jobs"></table></div>
+  <p class="muted">Убийства «бот / я» определяются по тому, действовал ли бот последние 3 секунды или шла его задача. Данные вашей игры пишутся, пока запущен сервер wow-mcp.</p>
+</main>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+<script>
+const $ = id => document.getElementById(id);
+const css = n => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+const charts = {};
+const num = v => Number(v || 0);
+const sum = o => Object.values(o || {}).reduce((a, b) => a + num(b), 0);
+function money(c) { c = num(c); const s = c < 0 ? '-' : ''; c = Math.abs(c); const g = Math.floor(c / 10000), sl = Math.floor(c / 100) % 100;
+  return s + (g ? g + 'з ' : '') + sl + 'с'; }
+function dur(sec) { sec = num(sec); const h = Math.floor(sec / 3600), m = Math.floor(sec / 60) % 60; return h ? h + 'ч ' + m + 'м' : m + 'м'; }
+function draw(id, cfg) { if (charts[id]) charts[id].destroy(); charts[id] = new Chart($(id), cfg); }
+function card(l, v, s) { return '<div class="card"><div class="l">' + l + '</div><div class="v">' + v + '</div><div class="s">' + (s || '') + '</div></div>'; }
+
+async function load() {
+  const h = $('hours').value;
+  try {
+    const [sm, tl, pr, jobs, spots] = await Promise.all(['summary?hours=' + h, 'timeline?hours=' + h, 'progress?hours=' + h, 'jobs?limit=20', 'spots?hours=' + h]
+      .map(u => fetch('/api/' + u).then(r => { if (!r.ok) throw new Error(u + ': ' + r.status); return r.json(); })));
+    $('err').textContent = '';
+    const kb = num(sm.kills.bot), kp = num(sm.kills.player), hrs = Math.max(sm.hours, 1);
+    const botH = sm.botSeconds / 3600;
+    $('cards').innerHTML =
+      card('Убито ботом', kb, botH > 0.05 ? (kb / botH).toFixed(1) + ' в час работы' : '') +
+      card('Убито мной', kp, '') +
+      card('Добыча (окон)', sum(sm.loot), 'бот ' + num(sm.loot.bot) + ', я ' + num(sm.loot.player)) +
+      card('Пусто / не найден', sum(sm.lootMiss), Object.entries(sm.lootMiss || {}).map(([k, v]) => k + ': ' + v).join('; ')) +
+      card('Смерти', sum(sm.deaths), 'бот ' + num(sm.deaths.bot) + ', я ' + num(sm.deaths.player)) +
+      card('Опыт', sm.xpGained, (sm.xpGained / hrs).toFixed(0) + ' в час') +
+      card('Деньги (итог)', money(sm.moneyNet), 'продажи: ' + money(sm.sells.money) + ' (' + sm.sells.items + ' предм.)') +
+      card('Бот работал', dur(sm.botSeconds), '');
+
+    // убийства по времени
+    const times = [...new Set(tl.map(r => r.t))].sort();
+    const series = (kind, src) => times.map(t => num((tl.find(r => r.t === t && r.kind === kind && r.source === src) || {}).n));
+    const lab = times.map(t => new Date(t).toLocaleString('ru', sm.hours <= 48 ? { hour: '2-digit', minute: '2-digit', day: '2-digit', month: '2-digit' } : { day: '2-digit', month: '2-digit' }));
+    draw('cKills', { type: 'bar', data: { labels: lab, datasets: [
+      { label: 'бот', data: series('kill', 'bot'), backgroundColor: css('--bot') },
+      { label: 'я', data: series('kill', 'player'), backgroundColor: css('--player') }] },
+      options: { scales: { x: { stacked: true }, y: { stacked: true, beginAtZero: true } } } });
+    draw('cLoot', { type: 'bar', data: { labels: lab, datasets: [
+      { label: 'добыча бот', data: series('loot', 'bot'), backgroundColor: css('--bot') },
+      { label: 'добыча я', data: series('loot', 'player'), backgroundColor: css('--player') },
+      { label: 'смерти', data: times.map((t, i) => series('death', 'bot')[i] + series('death', 'player')[i]), backgroundColor: css('--bad') }] },
+      options: { scales: { y: { beginAtZero: true } } } });
+
+    // опыт по времени (снимки идут от новых к старым)
+    const p = pr.slice().reverse();
+    draw('cXp', { type: 'line', data: { labels: p.map(r => new Date(r.ts).toLocaleTimeString('ru', { hour: '2-digit', minute: '2-digit' })),
+      datasets: [{ label: 'опыт на уровне ' + (p.length ? p[p.length - 1].level : ''), data: p.map(r => num(r.xp)), borderColor: css('--good'), pointRadius: 0, tension: 0.2 }] },
+      options: { scales: { y: { beginAtZero: false } } } });
+
+    // карта убийств: пузырьки по клеткам
+    draw('cSpots', { type: 'bubble', data: { datasets: [
+      { label: 'бот', data: spots.filter(r => num(r.bot) >= num(r.player)).map(r => ({ x: num(r.cx), y: num(r.cy), r: 3 + Math.sqrt(num(r.kills)) * 2 })), backgroundColor: css('--bot') + '99' },
+      { label: 'я', data: spots.filter(r => num(r.bot) < num(r.player)).map(r => ({ x: num(r.cx), y: num(r.cy), r: 3 + Math.sqrt(num(r.kills)) * 2 })), backgroundColor: css('--player') + '99' }] },
+      options: { scales: { x: { min: 0, max: 100 }, y: { min: 0, max: 100, reverse: true } } } });
+
+    $('jobs').innerHTML = '<tr><th>Начало</th><th>Задача</th><th>Длит.</th><th>Статус</th><th>Итог</th><th>Убито</th><th>Добыча</th><th>Пусто</th><th>Смерти</th></tr>' +
+      jobs.map(j => '<tr><td>' + new Date(j.started_at).toLocaleString('ru') + '</td><td>' + j.name + '</td><td>' + dur(j.seconds) + '</td><td>' +
+        (j.status || '') + '</td><td>' + (j.result || '') + '</td><td>' + j.kills + '</td><td>' + j.loot + '</td><td>' + j.loot_miss + '</td><td>' + j.deaths + '</td></tr>').join('');
+  } catch (e) { $('err').textContent = 'Ошибка загрузки: ' + e.message; }
+}
+$('hours').addEventListener('change', load);
+load(); setInterval(load, 30000);
+</script>
+</body>
+</html>

@@ -282,6 +282,20 @@ java -Dwow.bot-js-dir=/Users/vadim/Downloads/wow-mcp/src/main/resources/bot \
 - Ошибка одной вставки больше не выключает БД целиком: WARN со стектрейсом, отключение —
   только после 5 ошибок подряд.
 
+## Статистика (дашборд)
+
+Модуль `dashboard/` — отдельное веб-приложение (Spring Boot, порт 8085), которое **только читает** БД `wow_bot`:
+убийства бота и игрока, добыча, смерти, продажи, опыт, деньги, запуски задач бота, карта убийств.
+Данные пишет wow-mcp: таблицы `mob_kill`, `bot_job`, `game_event` (события `loot`, `lootmiss`, `death`, `sell`, `stat`).
+
+```bash
+./mvnw -q -f dashboard/pom.xml package
+java -jar dashboard/target/wow-dashboard.jar      # http://localhost:8085
+```
+
+БД задаётся переменными `WOW_DB_URL`, `WOW_DB_USER`, `WOW_DB_PASSWORD` (по умолчанию `wow_bot`, пользователь `vadim`).
+Данные вашей игры без бота пишутся, только пока запущен сервер wow-mcp: события из страницы вычитывает он.
+
 ## Структура
 
 ```
@@ -305,6 +319,7 @@ src/main/java/com/example/wowmcp/
   tools/RotationTools.java        // spells, ротация, профили, обучение
   tools/InventoryTools.java       // bags, торговцы, sell_now, keep_item
   tools/ToolSupport.java          // общие помощники; RotationParser, GrindOptions — валидация
+dashboard/                        // отдельное приложение статистики (только чтение БД), свой pom.xml
 src/main/resources/
   bot/                            // модули бота
     00-core.js                    // window.* хелперы, базовый bot, start/report

@@ -62,14 +62,17 @@ public class EventCollector {
 
     /** События статистики (добыча, смерти, продажи, снимки опыта/денег): остальные поля уходят в data (jsonb). */
     private static final java.util.Set<String> STAT_TYPES = java.util.Set.of("loot", "lootmiss", "death", "sell", "stat");
-    private static final java.util.Set<String> COMMON_FIELDS =
-            java.util.Set.of("type", "source", "jobUid", "zone", "x", "y", "at", "phase", "uid", "name", "status", "result");
+    /** Поля, которые лежат в колонках, а не в data. */
+    private static final java.util.Set<String> EVENT_COLUMNS =
+            java.util.Set.of("type", "source", "jobUid", "zone", "x", "y", "at");
+    private static final java.util.Set<String> JOB_COLUMNS =
+            java.util.Set.of("type", "phase", "uid", "name", "status", "result", "at");
 
-    /** Поля события без общих — JSON для колонки data. */
-    private String dataOf(Map<String, Object> ev) {
+    /** Остальные поля события — JSON для колонки data (null, если их нет). */
+    private String dataOf(Map<String, Object> ev, java.util.Set<String> columns) {
         Map<String, Object> data = new java.util.LinkedHashMap<>();
         for (Map.Entry<String, Object> e : ev.entrySet()) {
-            if (!COMMON_FIELDS.contains(e.getKey())) data.put(e.getKey(), e.getValue());
+            if (!columns.contains(e.getKey())) data.put(e.getKey(), e.getValue());
         }
         return data.isEmpty() ? null : json.writeValueAsString(data);
     }
@@ -164,7 +167,7 @@ public class EventCollector {
                     if ("start".equals(str(ev.get("phase")))) {
                         gameEvents.jobStart(uid, name, at);
                     } else {
-                        gameEvents.jobEnd(uid, name, at, str(ev.get("status")), str(ev.get("result")), dataOf(ev));
+                        gameEvents.jobEnd(uid, name, at, str(ev.get("status")), str(ev.get("result")), dataOf(ev, JOB_COLUMNS));
                     }
                 }
             } else if (STAT_TYPES.contains(type)) {
@@ -172,7 +175,7 @@ public class EventCollector {
                     long at = asLong(ev.get("at"));
                     gameEvents.insertEvent(type, str(ev.get("source")), str(ev.get("jobUid")), asInt(ev.get("zone")),
                             asDouble(ev.get("x")), asDouble(ev.get("y")), at == 0 ? System.currentTimeMillis() : at,
-                            dataOf(ev));
+                            dataOf(ev, EVENT_COLUMNS));
                 }
             } else if ("road".equals(type)) {
                 if (db.isEnabled()) {

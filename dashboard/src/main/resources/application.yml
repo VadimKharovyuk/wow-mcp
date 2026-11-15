@@ -1,0 +1,13 @@
+# Дашборд читает ту же БД, что и wow-mcp (только чтение). Запуск: java -jar dashboard/target/wow-dashboard.jar
+server:
+  port: 8085
+spring:
+  application:
+    name: wow-dashboard
+  datasource:
+    url: ${WOW_DB_URL:jdbc:postgresql://localhost:5432/wow_bot}
+    username: ${WOW_DB_USER:vadim}
+    password: ${WOW_DB_PASSWORD:}
+    hikari:
+      read-only: true
+      maximum-pool-size: 3
