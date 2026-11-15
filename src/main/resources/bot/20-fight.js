@@ -33,10 +33,11 @@ Object.assign(bot, {
   spellInRange(h) { const r = (this.spells() || []).find(x => x.nameHash === h); return r ? r.inRange : -1; },
 
   // повернуться к направлению a (радианы, как facing) — держим A/D, пока не довернём
-  async turnTo(a, maxMs = 2500) {
+  // abort() — условие досрочного выхода (stop): иначе после «стоп» поворот ещё до 2.5 с жмёт A/D
+  async turnTo(a, maxMs = 2500, abort = null) {
     const norm = v => Math.atan2(Math.sin(v), Math.cos(v));
     const t0 = Date.now();
-    while (Date.now() - t0 < maxMs) {
+    while (Date.now() - t0 < maxMs && !(abort && abort())) {
       const e = norm(a - this.state().facing);
       if (Math.abs(e) < 0.12) break;
       this.key('A', e > 0); this.key('D', e < 0);
@@ -48,10 +49,24 @@ Object.assign(bot, {
   // отход стрелка: спиной к мобу, пробежать, повернуться обратно
   async retreat(ms = 2200) {
     const f0 = this.state().facing;
+    const off = () => !this.running;
     this.key('W', false);
-    await this.turnTo(f0 + Math.PI);
+    await this.turnTo(f0 + Math.PI, 2500, off);
+    if (off()) return;
     this.key('W', true); await sleep(ms); this.key('W', false);
-    await this.turnTo(f0);
+    await this.turnTo(f0, 2500, off);
+  },
+
+  // когда в последний раз нажимали лечение (игрока или питомца) — его чтение прерывается движением
+  lastHealCastAt() {
+    this.lastKey = this.lastKey || {}; this.lastSpellAt = this.lastSpellAt || {};
+    let t = this.lastKey['4'] || 0;                               // v1: паладин лечит на 4
+    for (const r of this.activeRotation()) {
+      if (!r.maxHpPct && !r.maxPetHpPct) continue;
+      const v = r.spell ? (this.lastSpellAt[r.spell] || 0) : (this.lastKey[r.key] || 0);
+      if (v > t) t = v;
+    }
+    return t;
   },
 
   // питомцу нужно лечение: есть, жив, HP ниже порога и лечение на нём ещё не висит (HoT 15 с)
@@ -85,7 +100,7 @@ Object.assign(bot, {
         if (s.err === 1 && turns < 4) { await this.hold('A', 450); turns++; continue; }  // ~90° поворот
         // стрелку «далеко» в мёртвой зоне не значит «подойди» — он и так вплотную
         const inDeadZone = cc && cc.ranged && this.spellInRange(cc.meleeSpell) === 1;
-        if (s.err === 2 && !inDeadZone && now - (this.lastKey['4'] || 0) > HEAL_CAST_LOCK_MS) {
+        if (s.err === 2 && !inDeadZone && now - this.lastHealCastAt() > HEAL_CAST_LOCK_MS) {
           await this.hold('W', 500); continue;                                           // подойти ближе
         }
       }
@@ -96,7 +111,8 @@ Object.assign(bot, {
       const deadZone = cc && cc.ranged && this.spellInRange(cc.meleeSpell) === 1
           && this.spellInRange(cc.shootSpell) === 0 && (s.tDist & 2);
       if (!deadZone) deadSince = 0; else if (!deadSince) deadSince = now;
-      if (deadZone && now - deadSince >= 1000 && s.fight && retreats < 2 && now - lastRetreat > 10000 && hpPct > 0.3) {
+      if (deadZone && now - deadSince >= 1000 && s.fight && retreats < 2 && now - lastRetreat > 10000 && hpPct > 0.3
+          && now - this.lastHealCastAt() > HEAL_CAST_LOCK_MS) {
         const p = this.pet();
         if (p && p.exists && !p.dead && p.ttPet) {
           deadSince = 0;

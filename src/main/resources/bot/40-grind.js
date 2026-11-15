@@ -7,6 +7,7 @@ Object.assign(bot, {
     minLvlDiff: -5,     // не трогать мобов слабее (серые — без опыта)
     maxLvlDiff: 2,      // и сильнее себя больше чем на 2 уровня
     restBelow: 0.6,     // отдыхать, если HP ниже 60%
+    petRestBelow: 0.5,  // отдыхать (лечить питомца), если HP питомца ниже 50% и в ротации есть его лечение
     manaBelow: 0.3,    // отдыхать, если мана ниже 30%
     pullKey: '3',       // умение для агро издалека
     healKey: '7',       // лечение заклинанием в отдыхе (v1)
@@ -62,7 +63,7 @@ Object.assign(bot, {
           const s = this.state();
           { const why = this.targetProblem(s); if (!why) return s; this.noteReject(why); }
         }
-        if (turn < 2) await this.turnTo(this.state().facing + 2.1);   // ~120°
+        if (turn < 2) await this.turnTo(this.state().facing + 2.1, 2500, () => !this.grinding);   // ~120°
       }
       if (!this.grinding) return null;
       await chat('/cleartarget');
@@ -83,6 +84,15 @@ Object.assign(bot, {
     return null;
   },
 
+  // питомцу пора на лечение: есть правило лечения питомца, питомец жив, HP низкое, лечение не висит.
+  // Не чаще раза в 90 с: если лечение не удаётся, гринд не должен вечно сидеть в отдыхе.
+  petNeedsRest(cfg) {
+    if (!this.activeRotation().some(r => r.maxPetHpPct && r.spell)) return false;
+    if (Date.now() - (this.lastPetRestAt || 0) < 90000) return false;
+    const p = this.pet();
+    return !!p && p.exists && !p.dead && !p.mend && p.hpPct < (cfg.petRestBelow ?? 0.5);
+  },
+
   // подойти, пока умение агро не станет доступно (цель в его радиусе)
   async approach(maxMs = 6000) {
     const isReady = k => (this.state().ready >> (+k - 1)) & 1;
@@ -100,6 +110,7 @@ Object.assign(bot, {
 
   // бой (+ лут, если grindCfg.loot); возвращает null если всё ок, иначе причину для выхода из гринда
   async fightAndLoot(st) {
+    if (!this.grinding) return 'остановлен вручную';   // fight() сам включает running — после stop() не начинать бой
     const f = await this.fight();
     if (!this.grinding) return 'остановлен вручную';
     if (f.result !== 'бой окончен') return 'бой: ' + f.result;
@@ -218,7 +229,9 @@ Object.assign(bot, {
         }
       }
 
-      if (s.hp / s.hpMax < cfg.restBelow || s.manaPct < cfg.manaBelow) {
+      const petRest = this.petNeedsRest(cfg);
+      if (s.hp / s.hpMax < cfg.restBelow || s.manaPct < cfg.manaBelow || petRest) {
+        if (petRest) this.lastPetRestAt = Date.now();
         await this.rest({ manaBelow: cfg.manaBelow, healKey: cfg.healKey, healSpell: cfg.healSpell, drinkKey: cfg.drinkKey });
         st.rests++; continue;
       }

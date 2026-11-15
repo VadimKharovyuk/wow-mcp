@@ -14,6 +14,8 @@ Object.assign(bot, {
     while (this.running) {
       const s = this.state();
       const done = r => { this.release(); return { result: r, stuckTries: stuck, ...s }; };
+      if (s.x === 0 && s.y === 0) return done('нет координат (закрой карту мира)');
+      if (s.fight) return done('бой');      // до Tab: иначе Tab на бегу собьёт цель, которая уже бьёт нас
       if (scan) {
         const now = Date.now();
         // дальность в spells() обновляется раз в 0.5 с — проверяем цель через 0.7 с после Tab
@@ -25,8 +27,6 @@ Object.assign(bot, {
           await this.tap('TAB');
         }
       }
-      if (s.x === 0 && s.y === 0) return done('нет координат (закрой карту мира)');
-      if (s.fight) return done('бой');
       const dx = tx - s.x, dy = ty - s.y;
       if (Math.hypot(dx, dy) < tol) return done('дошёл');
       if (Date.now() - t0 > timeout) return done('таймаут');
@@ -42,12 +42,14 @@ Object.assign(bot, {
         // упёрлись
         if (++stuck > 6) return done('застрял');
         this.key('W', false); this.key('A', false); this.key('D', false);
+        // после stop() (running=false) оставшиеся шаги объезда не выполняем: персонаж не должен бежать дальше
+        const step = async (k, ms) => { if (this.running) await this.hold(k, ms); };
         if (stuck === 1) {
           await this.tap('SPACE');                       // сначала просто прыжок (низкий забор, камень)
         } else {
-          await this.hold(['S'], 600);                   // шаг назад
-          await this.hold([side > 0 ? 'A' : 'D'], 400 + 150 * stuck);   // поворот ~70–180°
-          await this.hold(['W'], 1500 + 300 * stuck);    // пробежать в сторону
+          await step(['S'], 600);                        // шаг назад
+          await step([side > 0 ? 'A' : 'D'], 400 + 150 * stuck);   // поворот ~70–180°
+          await step(['W'], 1500 + 300 * stuck);         // пробежать в сторону
           if (stuck % 2 === 1) side = -side;             // чередовать лево/право
         }
         last = this.state(); lastMove = Date.now();

@@ -203,6 +203,12 @@ window.bot = {
     const code = codeFor(rec.keyCode);
     if (!code) { this.warnings.push('unsupported key for spell: ' + nameHash); return false; }
     const key = keyChar(rec.keyCode);
+    // «-» и «=»: синтетическое нажатие игра, похоже, не принимает — предупреждаем один раз
+    if ((rec.keyCode === 187 || rec.keyCode === 189) && !(this.warnedKeys = this.warnedKeys || {})[nameHash]) {
+      this.warnedKeys[nameHash] = true;
+      this.warnings.push('клавиши «-» и «=» игра может не принимать; если умение ' + nameHash +
+          ' не срабатывает, перебинди его на 1–9, 0 или букву');
+    }
     const mods = rec.mods || 0;
     const shift = !!(mods & 1), ctrl = !!(mods & 2), alt = !!(mods & 4);
     const canvas = CANVAS();
@@ -211,9 +217,9 @@ window.bot = {
     if (ctrl) { canvas.dispatchEvent(new KeyboardEvent('keydown', {key:'Control', code:'ControlLeft', keyCode:17, ctrlKey:true, bubbles:true})); modDown.push('ctrl'); }
     if (alt) { canvas.dispatchEvent(new KeyboardEvent('keydown', {key:'Alt', code:'AltLeft', keyCode:18, altKey:true, bubbles:true})); modDown.push('alt'); }
     this.lastBotPressAt = Date.now();
-    canvas.dispatchEvent(new KeyboardEvent('keydown', {key, code, keyCode: rec.keyCode, shiftKey: shift, ctrlKey: ctrl, altKey: alt, bubbles:true}));
+    canvas.dispatchEvent(new KeyboardEvent('keydown', {key, code, keyCode: rec.keyCode, which: rec.keyCode, shiftKey: shift, ctrlKey: ctrl, altKey: alt, bubbles:true}));
     await sleep(60);
-    canvas.dispatchEvent(new KeyboardEvent('keyup', {key, code, keyCode: rec.keyCode, shiftKey: shift, ctrlKey: ctrl, altKey: alt, bubbles:true}));
+    canvas.dispatchEvent(new KeyboardEvent('keyup', {key, code, keyCode: rec.keyCode, which: rec.keyCode, shiftKey: shift, ctrlKey: ctrl, altKey: alt, bubbles:true}));
     if (alt) canvas.dispatchEvent(new KeyboardEvent('keyup', {key:'Alt', code:'AltLeft', keyCode:18, bubbles:true}));
     if (ctrl) canvas.dispatchEvent(new KeyboardEvent('keyup', {key:'Control', code:'ControlLeft', keyCode:17, bubbles:true}));
     if (shift) canvas.dispatchEvent(new KeyboardEvent('keyup', {key:'Shift', code:'ShiftLeft', keyCode:16, bubbles:true}));
@@ -242,7 +248,7 @@ window.bot = {
     // Задача не должна остаться в статусе 'running': по нему 60-track.js решает,
     // что действие сделал бот, и тогда ручные нажатия игрока не пишутся в БД.
     if (this.job && this.job.status === 'running') {
-      this.job = { name: this.job.name, status: 'stopped', started: this.job.started, stoppedAt: Date.now() };
+      this.job = { name: this.job.name, status: 'stopped', started: this.job.started, stoppedAt: Date.now(), id: this.job.id };
     }
     this.release();
   },
@@ -255,11 +261,23 @@ window.bot = {
 
   // ---- фоновый режим для Claude: start → report ----
   job: { status: 'idle' },
+  // id задачи защищает от гонки: после stop() старая задача ещё дорабатывает цикл и не должна
+  // затирать статус новой. Пока она не завершилась, новую не запускаем (иначе два цикла управляют
+  // персонажем одновременно); если старая зависла дольше 15 с после stop — разрешаем.
   start(name, ...args) {
     if (this.job.status === 'running') return 'уже занят: ' + this.job.name;
-    this.job = { name, status: 'running', started: Date.now() };
-    this[name](...args).then(r => { this.job = { name, status: 'done', ...r }; })
-        .catch(e => { this.job = { name, status: 'error', error: '' + e }; });
+    if (typeof this[name] !== 'function') return 'неизвестная задача: ' + name;
+    if (this.jobBusy && !(this.job.stoppedAt && Date.now() - this.job.stoppedAt > 15000)) {
+      return 'предыдущая задача ещё останавливается — повтори через секунду';
+    }
+    const id = this.jobSeq = (this.jobSeq || 0) + 1;
+    this.job = { name, status: 'running', started: Date.now(), id };
+    this.jobBusy = true;
+    // Promise.resolve().then: синхронное исключение или не-промис тоже не оставят задачу в 'running'
+    Promise.resolve().then(() => this[name](...args))
+        .then(r => { if (this.job.id === id) this.job = { name, status: 'done', id, ...r }; })
+        .catch(e => { if (this.job.id === id) this.job = { name, status: 'error', id, error: '' + e }; })
+        .finally(() => { if (this.jobSeq === id) this.jobBusy = false; });
     return 'запущено: ' + name;
   },
   report() {
