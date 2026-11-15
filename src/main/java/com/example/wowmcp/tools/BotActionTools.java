@@ -119,6 +119,18 @@ public class BotActionTools {
         return jsonResult(bridge.stop());
     }
 
+    @Tool(name = "revive", description = """
+            Воскресить персонажа: отпустить дух, добежать до трупа, дождаться задержки и воскреснуть, \
+            затем отдохнуть. Работает в фоне — результат смотри через wait_job. \
+            Если персонаж жив — ответит «персонаж жив» и ничего не сделает.""")
+    public String revive() {
+        GameState state = GameState.parse(bridge.report());
+        if (!state.dead() && !state.ghost()) {
+            return jsonResult("персонаж жив");
+        }
+        return jsonResult(bridge.start("revive", List.of()));
+    }
+
     @Tool(name = "reload_bot", description = """
             Перезагружает bot.js прямо в открытой странице игры, без её перезагрузки: \
             останавливает старого бота, удаляет window.bot и заново загружает скрипт, \

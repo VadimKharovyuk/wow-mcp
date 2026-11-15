@@ -51,4 +51,15 @@ class GameStateTest {
         assertThat(state.hpPct()).isEqualTo(50);
         assertThat(state.lootN()).isZero();
     }
+
+    @Test
+    void parsesDeadAndGhostFlags() {
+        GameState state = GameState.parse("{\"hpPct\":0,\"hp\":0,\"hpMax\":1000,\"dead\":true,\"ghost\":false}");
+        assertThat(state.dead()).isTrue();
+        assertThat(state.ghost()).isFalse();
+        // старый бот без этих полей: оба false
+        GameState old = GameState.parse("{\"hpPct\":50,\"hp\":500,\"hpMax\":1000}");
+        assertThat(old.dead()).isFalse();
+        assertThat(old.ghost()).isFalse();
+    }
 }

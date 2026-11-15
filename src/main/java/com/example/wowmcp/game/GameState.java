@@ -38,7 +38,9 @@ public record GameState(
         int moLvl,
         int kills,
         int zone,
-        int pLvl) {
+        int pLvl,
+        boolean dead,
+        boolean ghost) {
 
     /**
      * Текущая задача бота. У завершённой задачи {@code result} содержит итог,

@@ -20,7 +20,7 @@ final class GrindOptions {
     static Map<String, Object> validated(
             Double radius, Integer maxKills, Integer maxMinutes, Integer minLvlDiff, Integer maxLvlDiff,
             Double manaBelow, String healKey, String drinkKey, Boolean loot, Integer respawnSec,
-            Integer minFreeSlots, String mode, Double maxDistance) {
+            Integer minFreeSlots, String mode, Double maxDistance, Boolean autoRevive) {
         Map<String, Object> opts = new LinkedHashMap<>();
         if (radius != null) {
             requireRange(Double.isFinite(radius) && radius >= 0.5 && radius <= 10, "radius должен быть от 0.5 до 10");
@@ -73,6 +73,9 @@ final class GrindOptions {
         if (maxDistance != null) {
             requireRange(Double.isFinite(maxDistance) && maxDistance >= 2 && maxDistance <= 40, "maxDistance должен быть от 2 до 40");
             opts.put("maxDistance", maxDistance);
+        }
+        if (autoRevive != null) {
+            opts.put("autoRevive", autoRevive);
         }
         return opts;
     }

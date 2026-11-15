@@ -18,6 +18,7 @@ Object.assign(bot, {
     maxMinutes: 30,
     respawnSec: 240,    // через сколько секунд место из базы снова считается «тёплым»
     minFreeSlots: 2,    // при <= этом значении — идти к торговцу (если задан)
+    autoRevive: true,   // после смерти: отпустить дух, добежать до трупа, воскреснуть и продолжить (revive)
   },
   grindSpots: [],
   grindStats: null,
@@ -122,7 +123,7 @@ Object.assign(bot, {
   async fightAndLoot(st) {
     if (!this.grinding) return 'остановлен вручную';   // fight() сам включает running — после stop() не начинать бой
     const f = await this.fight();
-    if (this.dead() || f.hp === 0) return 'dead';
+    if (this.dead() || f.hp === 0) return null;   // погибли: гринд-цикл увидит смерть на следующем шаге
     if (!this.grinding) return 'остановлен вручную';
     if (f.result !== 'бой окончен') return 'бой: ' + f.result;
     st.kills++;
@@ -216,12 +217,32 @@ Object.assign(bot, {
                       hpPctBefore: la.hpPct, manaPctBefore: la.manaPct, pet: la.pet || null, kills: st.kills };
       console.warn('ПЕРСОНАЖ ПОГИБ', death);
       this.warnings.push('персонаж погиб: ' + JSON.stringify(death));
-      st.deaths = (st.deaths || 0) + 1;
       st.laps = this.patrolLaps || 0;
       this.stop();
       return { result: 'персонаж погиб', status: 'dead', death, stats: st, ...s };
     };
-    const fin = p => p === 'dead' ? dieOut() : out(p);   // результат fightAndLoot
+    // смерть: считаем, смотрим защиту от цикла смертей, воскрешаемся и продолжаем с той же точки.
+    // null — продолжать гринд; иначе готовый результат задачи.
+    const deathLog = st.deathLog = [];
+    const onDeath = async () => {
+      const s0 = this.state(), la = this.lastAlive || {};
+      const rec = { x: s0.x, y: s0.y, zone: s0.zone, at: Date.now(), mobsInFight: this.fightMobs || 0,
+                    hpPctBefore: la.hpPct, manaPctBefore: la.manaPct };
+      deathLog.push(rec);
+      st.deaths = deathLog.length;
+      console.warn('ПЕРСОНАЖ ПОГИБ', rec);
+      this.warnings.push('персонаж погиб: ' + JSON.stringify(rec));
+      if (cfg.autoRevive === false) return dieOut();
+      const recent = deathLog.filter(d => Date.now() - d.at < 600000);
+      if (recent.length >= 3) {                        // защита от цикла смертей: 3 за 10 минут
+        st.laps = this.patrolLaps || 0; this.stop();
+        return { result: 'слишком много смертей', status: 'stopped', deaths: recent, stats: st, ...this.state() };
+      }
+      const r = await this.revive();
+      if (r.result !== 'воскрешён') return out('воскрешение: ' + r.result);
+      if (this.grinding) this.running = false;         // дальше работает сам цикл гринда
+      return null;
+    };
 
     if (mode === 'patrol' && !this.patrolRoute.length) {
       return out('patrol: нет мест в пределах maxDistance');
@@ -229,13 +250,16 @@ Object.assign(bot, {
 
     while (this.grinding) {
       const s = this.state();
-      if (this.dead() || s.hp === 0) return dieOut();
+      if (this.dead() || s.hp === 0) {
+        const d = await onDeath(); if (d) return d;
+        continue;
+      }
       this.lastAlive = { hpPct: +(s.hp / s.hpMax).toFixed(2), manaPct: s.manaPct, pet: s.pet };
       if (cfg.maxKills && st.kills >= cfg.maxKills) return out('лимит убийств достигнут');
       if (Date.now() - t0 > cfg.maxMinutes * 60000) return out('время вышло');
 
       if (s.fight) {                                        // на нас напали — сначала отбиться
-        const p = await this.fightAndLoot(st); if (p) return fin(p); continue;
+        const p = await this.fightAndLoot(st); if (p) return out(p); continue;
       }
 
       // проверка сумок — работает при любом cfg.loot
@@ -266,7 +290,7 @@ Object.assign(bot, {
         // подходящий враг ближе ~10 м — бьём, а не пропускаем из-за радиуса гринда
         if (await this.nearbyHostile()) {
           if (!(await this.approach())) { st.skipped++; await chat('/cleartarget'); continue; }
-          const p = await this.fightAndLoot(st); if (p) return fin(p);
+          const p = await this.fightAndLoot(st); if (p) return out(p);
           continue;
         }
         this.noteReject('вне радиуса');
@@ -278,7 +302,7 @@ Object.assign(bot, {
       // на бегу уже выбрали подходящую цель (moveTo вернул 'цель') — начать бой отсюда, издалека
       if (scan && this.goodPullTarget(this.state())) {
         if (!(await this.approach())) { st.skipped++; await chat('/cleartarget'); continue; }
-        const p = await this.fightAndLoot(st); if (p) return fin(p);
+        const p = await this.fightAndLoot(st); if (p) return out(p);
         continue;
       }
 
@@ -295,7 +319,7 @@ Object.assign(bot, {
         if (t2) {
           st.spotHits++;
           if (!(await this.approach())) { st.skipped++; await chat('/cleartarget'); }
-          else { const p = await this.fightAndLoot(st); if (p) return fin(p); }
+          else { const p = await this.fightAndLoot(st); if (p) return out(p); }
         } else {
           spot.empty++;
         }
@@ -308,7 +332,7 @@ Object.assign(bot, {
       if (!this.grinding) break;
       if (tgt) {
         if (!(await this.approach())) { st.skipped++; await chat('/cleartarget'); continue; }
-        const p = await this.fightAndLoot(st); if (p) return fin(p);
+        const p = await this.fightAndLoot(st); if (p) return out(p);
         continue;
       }
 
@@ -323,7 +347,7 @@ Object.assign(bot, {
           if (t2) {
             st.spotHits++;
             if (!(await this.approach())) { st.skipped++; await chat('/cleartarget'); }
-            else { const p = await this.fightAndLoot(st); if (p) return fin(p); }
+            else { const p = await this.fightAndLoot(st); if (p) return out(p); }
           } else {
             spot.empty++;
           }

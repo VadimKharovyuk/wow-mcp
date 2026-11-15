@@ -11,7 +11,7 @@ Object.assign(bot, {
     const rejected = {};
     const bump = (reason) => { rejected[reason] = (rejected[reason] || 0) + 1; };
     for (const [fx, fy] of pts) {
-      if (this.job.status === 'running' && !this.grinding && this.job.name !== 'lookAround') break;
+      if (this.job.status === 'running' && !this.grinding && this.job.name !== 'lookAround' && this.job.name !== 'revive') break;
       this.mouse(fx, fy); await sleep(45);
       const s = this.state();
       if (!s.moAlive) continue;

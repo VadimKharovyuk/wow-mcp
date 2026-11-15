@@ -47,7 +47,9 @@ public class GrindTools {
             mode — режим обхода мест: 'radius' (по умолчанию, охота вокруг старта) или
             'patrol' (кольцевой обход мест зоны в пределах maxDistance, 2..40, по умолчанию 15).
             minFreeSlots — при таком/меньшем числе свободных слотов идти к ближайшему торговцу зоны
-            (работает при любом loot); если торговец не известен — гринд остановится.""")
+            (работает при любом loot); если торговец не известен — гринд остановится.
+            autoRevive — после смерти отпустить дух, добежать до трупа, воскреснуть и продолжить (по умолчанию true);
+            3 смерти за 10 минут останавливают гринд (статус stopped).""")
     public String grind(
             @ToolParam(required = false, description = "Радиус охоты вокруг старта, 0.5..10 (по умолчанию 2.5)")
             Double radius,
@@ -76,9 +78,12 @@ public class GrindTools {
             @ToolParam(required = false, description = "Режим обхода мест: 'radius' (по умолчанию) или 'patrol'")
             String mode,
             @ToolParam(required = false, description = "Максимальное расстояние до мест маршрута в patrol, 2..40 (по умолчанию 15)")
-            Double maxDistance) {
+            Double maxDistance,
+            @ToolParam(required = false, description = "После смерти воскреснуть у трупа и продолжить, true/false (по умолчанию true); "
+                    + "3 смерти за 10 минут останавливают гринд")
+            Boolean autoRevive) {
         Map<String, Object> opts = GrindOptions.validated(radius, maxKills, maxMinutes, minLvlDiff, maxLvlDiff,
-                manaBelow, healKey, drinkKey, loot, respawnSec, minFreeSlots, mode, maxDistance);
+                manaBelow, healKey, drinkKey, loot, respawnSec, minFreeSlots, mode, maxDistance, autoRevive);
         boolean patrol = "patrol".equals(opts.get("mode"));
 
         // Тёплые точки охоты из БД (задача 4б): только если БД доступна и useSpots не false.

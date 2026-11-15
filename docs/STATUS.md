@@ -37,7 +37,7 @@
 | № | Файл | Статус |
 |---|---|---|
 | 6 | `OPENCODE_TASK_6_COMBAT.md` | Код готов (все 17 пунктов, см. `docs/plans/TASK6_PLAN.md`), **ждёт проверки в игре** и перезапуска сервера (изменён `lua-setup.txt`) |
-| 7 | `docs/tasks/OPENCODE_TASK_7_DEATH.md` | Не начато |
+| 7 | `docs/tasks/OPENCODE_TASK_7_DEATH.md` | Код готов, **ждёт проверки в игре** и перезапуска сервера (новый `lua/death.lua`): таблица D, `80-death.js` (`revive`), `autoRevive` в гринде, защита «3 смерти за 10 мин», инструмент `revive`, поля `dead`/`ghost` в `get_state` |
 | 8 | `OPENCODE_TASK_8_HUNTER.md` | Не начато (части 2, 3, 4б сделаны вручную) |
 | 11 | `OPENCODE_TASK_11_PLACES.md` | Не начато |
 | 9 | `docs/tasks/OPENCODE_TASK_9_HUNT.md` | Не начато |

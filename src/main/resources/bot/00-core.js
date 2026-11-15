@@ -61,7 +61,7 @@ KEYS['0'] = KEYS[0];
 
 // ===== базовый объект бота =====
 window.bot = {
-  addr: null, stride: 0, saddr: null, sstride: 0, iaddr: null, istride: 0, qaddr: null, qstride: 0, held: {}, running: false, grinding: false, lastSpellAt: {}, warnings: [],
+  addr: null, stride: 0, saddr: null, sstride: 0, iaddr: null, istride: 0, qaddr: null, qstride: 0, daddr: null, dstride: 0, held: {}, running: false, grinding: false, lastSpellAt: {}, warnings: [],
   lastKey: {}, grindStats: null,
   // активный профиль; переживает reload_bot через window.__wowProfile (страница при этом не перезагружается)
   profile: window.__wowProfile || null,
@@ -112,6 +112,19 @@ window.bot = {
     const q = await this.findTable(777009.5, 777010.5, 2);
     if (q) { this.qaddr = q[0]; this.qstride = q[1]; console.log('НАШЁЛ Q (питомец) ✅', this.pet()); }
     else console.warn('Не нашёл Q (питомец).');
+    const d = await this.findTable(777007.5, 777008.5, 2);
+    if (d) { this.daddr = d[0]; this.dstride = d[1]; console.log('НАШЁЛ D (смерть) ✅', this.deathInfo()); }
+    else console.warn('Не нашёл D (смерть).');
+  },
+
+  // D-таблица: смерть/призрак/труп. null — таблица не найдена (старый Lua).
+  // corpseX/Y в тех же единицах, что x/y игрока (×100); 0,0 — труп в другой зоне/неизвестен.
+  deathInfo() {
+    if (this.daddr == null) return null;
+    const H = this.mem(), g = n => H[this.daddr + n * this.dstride];
+    return { dead: g(3) === 1, ghost: g(4) === 1,
+             corpseX: +(g(5) * 100).toFixed(2), corpseY: +(g(6) * 100).toFixed(2),
+             recoveryDelay: g(7), zone: g(8) };
   },
 
   // Q-таблица: питомец. null — таблица не найдена (старый Lua).
@@ -129,7 +142,10 @@ window.bot = {
     if (this.qaddr == null) return false;
     return this.mem()[this.qaddr + 10 * this.qstride] === 1;
   },
+  // мёртв или призрак (D, иначе Q[12] старого Lua)
   dead() {
+    const d = this.deathInfo();
+    if (d) return d.dead || d.ghost;
     if (this.qaddr == null) return false;
     return this.mem()[this.qaddr + 11 * this.qstride] === 1;
   },
@@ -162,7 +178,8 @@ window.bot = {
       targetHpMax: g(26), targetHpPct: g(26) > 0 ? +(g(10) / g(26)).toFixed(2) : 0,
       useCount: g(27), useSlot: g(28),
       luaVer: g(29),
-      pet: this.pet()
+      pet: this.pet(),
+      dead: (this.deathInfo() || {}).dead === true, ghost: (this.deathInfo() || {}).ghost === true
     };
   },
 
@@ -271,6 +288,7 @@ window.bot = {
   dispose() { if (this.trackInt) { clearInterval(this.trackInt); this.trackInt = null; } if (this.keyLogger) { document.removeEventListener('keydown', this.keyLogger, true); this.keyLogger = null; } },
   release() { this.running = false; for (const k in this.held) this.key(k, false); },
   stop() {
+    this.stopSeq = (this.stopSeq || 0) + 1;   // для долгих задач с ожиданиями (revive)
     this.grinding = false;
     // Задача не должна остаться в статусе 'running': по нему 60-track.js решает,
     // что действие сделал бот, и тогда ручные нажатия игрока не пишутся в БД.
