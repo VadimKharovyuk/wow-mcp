@@ -47,15 +47,17 @@ Object.assign(bot, {
     this.key('A', false); this.key('D', false);
   },
 
-  // отход стрелка: спиной к мобу, пробежать, повернуться обратно
-  async retreat(ms = 2200) {
-    const f0 = this.state().facing;
-    const off = () => !this.running;
+  // отход стрелка: несколько шагов назад (S), не разворачиваясь — лицом к мобу, чтобы сразу стрелять.
+  // ms — сколько держать S (≈ 3–4 ярда за 900 мс: пятиться медленнее, чем бежать). После stop() прерывается.
+  async retreat(ms = 900) {
     this.key('W', false);
-    await this.turnTo(f0 + Math.PI, 2500, off);
-    if (off()) return;
-    this.key('W', true); await sleep(ms); this.key('W', false);
-    await this.turnTo(f0, 2500, off);
+    this.key('S', true);
+    try {
+      const t0 = Date.now();
+      while (Date.now() - t0 < ms && this.running) await sleep(50);
+    } finally {
+      this.key('S', false);
+    }
   },
 
   // когда в последний раз нажимали лечение (игрока или питомца) — его чтение прерывается движением
