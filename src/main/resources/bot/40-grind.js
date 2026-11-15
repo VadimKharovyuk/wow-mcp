@@ -182,6 +182,8 @@ Object.assign(bot, {
     st.kills++;
     if (this.grindCfg.loot) {
       const l = await this.loot();
+      st.lootResults = st.lootResults || {};                       // сколько раз какой был исход — видно в get_state
+      st.lootResults[l.result] = (st.lootResults[l.result] || 0) + 1;
       if (l.result === 'добыча собрана') st.loots++;
       else if (l.result.startsWith('окно добычи')) return 'окно добычи не закрывается — сумки полные?';
       else if (l.result === 'бой во время сбора') return this.fightAndLoot(st);

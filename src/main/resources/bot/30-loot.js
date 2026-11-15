@@ -1,6 +1,26 @@
 // 30-loot.js — сбор добычи: ищем труп синтетической мышью, Lua сообщает moDead.
 Object.assign(bot, {
+  // Стрелок убивает издалека: до трупа бывает 20–30 ярдов, он мелкий и вне зоны скана мышью, а окно добычи
+  // открывается вблизи. Цель (мёртвая) остаётся выбранной — идём вперёд, пока она не окажется ближе ~11 ярдов.
+  async closeInOnCorpse(maxMs = 4000) {
+    const s0 = this.state();
+    if (!s0.target || s0.targetHp !== 0 || (s0.tDist & 2)) return;
+    const t0 = Date.now();
+    this.key('W', true);
+    try {
+      while (Date.now() - t0 < maxMs && this.job.status === 'running') {
+        const s = this.state();
+        if ((s.tDist & 2) || s.fight || !s.target) break;
+        await sleep(100);
+      }
+    } finally {
+      this.key('W', false);
+    }
+  },
+
   async loot({ timeout = 8000 } = {}) {
+    await this.closeInOnCorpse();
+    const b0 = this.bags();
     const pts = [];
     for (let fy = 0.45; fy <= 0.90; fy += 0.05)
       for (let fx = 0.25; fx <= 0.75; fx += 0.04) pts.push([fx, fy]);
@@ -16,11 +36,18 @@ Object.assign(bot, {
           sawDead = true;
           this.mouse(fx, fy, 'mousedown', 2); await sleep(60); this.mouse(fx, fy, 'mouseup', 2);
           const t0 = Date.now();
+          let sawWindow = false;
           while (Date.now() - t0 < timeout) {          // ждём: подбежал, окно открылось и закрылось
             await sleep(400);
             const s = this.state();
             if (s.fight) return { result: 'бой во время сбора', ...s };
-            if (Date.now() - t0 > 1500 && s.lootN === 0) return { result: 'добыча собрана', point: [fx, fy], ...s };
+            if (s.lootN > 0) sawWindow = true;
+            if (Date.now() - t0 > 1500 && s.lootN === 0) {
+              // автолут забирает добычу мгновенно и окно можно не успеть увидеть — смотрим и на сумки/деньги
+              const b1 = this.bags();
+              const gained = sawWindow || b1.free < b0.free || (b1.money || 0) > (b0.money || 0);
+              return { result: gained ? 'добыча собрана' : 'пустой труп или не открылся', point: [fx, fy], ...s };
+            }
           }
           const s = this.state();
           return { result: s.lootN > 0 ? 'окно добычи не закрылось (сумки полные?)' : 'не удалось открыть труп', ...s };
