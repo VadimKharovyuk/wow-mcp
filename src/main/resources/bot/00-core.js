@@ -357,6 +357,6 @@ window.bot = {
     const s = this.state();
     const di = this.deathInfo();
     const xp = di && di.xpMax > 0 ? Math.min(100, Math.round(di.xp / di.xpMax * 100)) : null;
-    return JSON.stringify({ job: this.job, hpPct: Math.round(s.hp / s.hpMax * 100), ...s, xpPct: xp, xpLeftPct: xp === null ? null : 100 - xp, grind: this.grindStats || null, route: this.routeProgress || null, hunt: this.huntStats || null, warn: (this.warnings || []).slice(-5) });
+    return JSON.stringify({ job: this.job, hpPct: Math.round(s.hp / s.hpMax * 100), ...s, xpPct: xp, xpLeftPct: xp === null ? null : 100 - xp, healLog: (this.healLog || []).slice(-10), grind: this.grindStats || null, route: this.routeProgress || null, hunt: this.huntStats || null, warn: (this.warnings || []).slice(-5) });
   }
 };

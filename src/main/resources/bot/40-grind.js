@@ -66,16 +66,23 @@ Object.assign(bot, {
     const now = Date.now();
     if (now - (this.lastNameScan || 0) < 5000) return null;
     this.lastNameScan = now;
+    this.nameCool = this.nameCool || {};
     for (const nm of names) {
       if (!this.grinding || this.state().fight) return null;
+      if ((this.nameCool[nm] || 0) > now) continue;       // до этого моба не дошли — пока не пробуем
       await chat('/target ' + nm);
       await sleep(300);
       await this.waitFrames(2);
       const s = this.state();
       if (this.goodPullTarget(s)) {
-        // /target имя берёт моба и за 40+ ярдов, и за спиной; берём только тех, кто ближе ~28 ярдов (tDist & 1)
-        if (!(s.tDist & 1)) { this.noteReject('вне дальности (>28 ярдов)'); continue; }
-        if (this.grindStats) this.grindStats.byName = (this.grindStats.byName || 0) + 1;
+        // /target имя берёт моба и за 40+ ярдов, и за спиной: далёкого (>28 ярдов, tDist & 1 == 0) тоже берём —
+        // approach() подбежит; не дошли — имя на паузу (см. approach)
+        const far = !(s.tDist & 1);
+        if (this.grindStats) {
+          this.grindStats.byName = (this.grindStats.byName || 0) + 1;
+          if (far) this.grindStats.byNameFar = (this.grindStats.byNameFar || 0) + 1;
+        }
+        this.farName = far ? nm : null;
         return s;
       }
     }
@@ -213,7 +220,33 @@ Object.assign(bot, {
   },
 
   // подойти, пока умение агро не станет доступно (цель в его радиусе)
+  // подбежать к цели; если это была далёкая цель из findByName и дойти не вышло — имя на паузу 45 с
   async approach(maxMs = 6000) {
+    const far = this.farName; this.farName = null;
+    let ok;
+    if (far) {
+      // далёкая цель: 10 с вместо 6; не дошли, но приближались и цель жива — ещё один добег на 3 с
+      const p0 = this.proximity();
+      ok = await this._approach(Math.max(maxMs, 10000));
+      if (!ok && this.grinding) {
+        const s = this.state();
+        if (!s.fight && s.target && s.targetHp !== 0 && this.proximity() > p0) {
+          if (this.grindStats) this.grindStats.farRetry = (this.grindStats.farRetry || 0) + 1;
+          ok = await this._approach(3000);
+        }
+      }
+    } else {
+      ok = await this._approach(maxMs);
+    }
+    if (far && !ok) {
+      this.nameCool = this.nameCool || {};
+      this.nameCool[far] = Date.now() + 45000;
+      if (this.grindStats) this.grindStats.farFails = (this.grindStats.farFails || 0) + 1;
+    }
+    return ok;
+  },
+
+  async _approach(maxMs = 6000) {
     // стрелок: идти, пока цель не достаётся выстрелом, и сразу остановиться (вплотную не подбегать)
     const cc = this.combatCfg && this.combatCfg();
     if (cc && cc.ranged && this.spellInRange(cc.shootSpell) !== -1) {

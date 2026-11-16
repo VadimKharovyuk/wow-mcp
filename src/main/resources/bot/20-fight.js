@@ -224,11 +224,17 @@ Object.assign(bot, {
       if (cc && cc.emergency) {
         let did = false;
         for (const e of cc.emergency) {
-          if (hpPct >= e.below || (e.inFightOnly && !s.fight)) continue;
+          if (hpPct >= e.below || !s.fight) continue;            // лечим только в бою (вне боя — отдых)
           if ((this.failedUntil[e.spell] || 0) > now || this.pressLog[e.spell]) continue;
           const rec = spellRec(e.spell);
           if (!rec || rec.ready !== 1) continue;
+          // верхом не лечим; HP перечитываем прямо перед нажатием (за круг цикла он мог вырасти или быть прочитан криво)
+          if (this.mounted && this.mounted()) continue;
+          { const s2 = this.state(); if (s2.hp / s2.hpMax >= e.below) continue; }
           if (await this.pressSpell(e.spell)) {
+            (this.healLog = this.healLog || []).push({ spell: e.spell, hp: Math.round(hpPct * 100), fight: !!s.fight,
+              mounted: !!(this.mounted && this.mounted()), at: new Date().toTimeString().slice(0, 8) });
+            if (this.healLog.length > 10) this.healLog.shift();
             this.pressLog[e.spell] = Date.now(); this.pressGT[e.spell] = s.time;
             this.warnings.push('лечение (' + e.spell + '): HP ' + Math.round(hpPct * 100) + '%');
             if (this.warnings.length > 20) this.warnings.shift();
