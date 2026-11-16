@@ -137,6 +137,13 @@ public class BotActionTools {
         return jsonResult(bridge.start("revive", List.of()));
     }
 
+    @Tool(name = "call_pet", description = """
+            Призвать питомца охотника: нет питомца — вызвать (клавиша 6), мёртв — воскресить («Воскрешение питомца» должно быть \
+            на панели с клавишей). Если питомец уже с вами — ничего не делает. Работает в фоне — результат через wait_job.""")
+    public String callPet() {
+        return jsonResult(bridge.start("summonPet", List.of()));
+    }
+
     @Tool(name = "reload_bot", description = """
             Перезагружает bot.js прямо в открытой странице игры, без её перезагрузки: \
             останавливает старого бота, удаляет window.bot и заново загружает скрипт, \

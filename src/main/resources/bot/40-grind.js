@@ -134,7 +134,7 @@ Object.assign(bot, {
     if (!p || !cc || !cc.petCallKey) return 'ok';
     const alive = () => { const q = this.pet(); return !!(q && q.exists && !q.dead); };
     if (alive() || this.state().fight) return 'ok';
-    const stopped = () => !this.grinding && this.job.name !== 'revive';
+    const stopped = () => !this.grinding && this.job.name !== 'revive' && this.job.name !== 'summonPet';
     const waitCast = async () => {
       await sleep(600);
       await this.waitFor(() => !this.casting(), 15000, 250, stopped);
@@ -161,6 +161,19 @@ Object.assign(bot, {
     }
     const q = this.pet();
     return q && q.exists && q.dead ? 'dead' : 'none';
+  },
+
+  // Отдельная задача «призови питомца»: нет питомца — вызвать, мёртв — воскресить; уже с нами — ничего не делать.
+  async summonPet() {
+    const cc = this.combatCfg && this.combatCfg();
+    if (!cc || !cc.petCallKey) return { result: 'у этого профиля нет питомца', ...this.state() };
+    const p = this.pet();
+    if (!p) return { result: 'нет данных о питомце (перезагрузи бота)', ...this.state() };
+    if (p.exists && !p.dead) return { result: 'питомец уже с тобой', ...this.state() };
+    if (this.state().fight) return { result: 'идёт бой — питомца не призываю', ...this.state() };
+    const r = await this.ensurePet(cc);
+    return { result: r === 'ok' ? 'питомец призван' : r === 'dead' ? 'питомец мёртв, воскресить не вышло' : 'не удалось призвать питомца',
+             ...this.state() };
   },
 
   // питомцу пора на лечение: есть правило лечения питомца, питомец жив, HP низкое, лечение не висит.
@@ -239,7 +252,7 @@ Object.assign(bot, {
     const now = Date.now();
     let best = null, bestScore = 0;
     for (const p of this.grindSpots || []) {
-      if (Math.hypot(p.x - anchor.x, p.y - anchor.y) > cfg.radius) continue;       // вне зоны охоты
+      if (Math.hypot(p.x - anchor.x, p.y - anchor.y) > Math.min(cfg.radius, 1.0)) continue;   // вне зоны охоты (не дальше ~50 м от места старта)
       if (p.visitedAt && now - p.visitedAt < cfg.respawnSec * 1000) continue;      // ещё не респавнулось
       const dist = Math.hypot(p.x - s.x, p.y - s.y) + 0.3;                        // от текущей позиции
       const score = p.kills * Math.pow(0.5, p.empty) / dist;                    // пустые места теряют вес
@@ -373,8 +386,8 @@ Object.assign(bot, {
         const p = await this.fightAndLoot(st); if (p) return out(p); continue;
       }
 
-      // проверка сумок — работает при любом cfg.loot
-      const b = this.bags ? this.bags() : null;
+      // проверка сумок: без лута они не наполняются — к торговцу не бегаем (иначе бот «убегает» со старта)
+      const b = cfg.loot && this.bags ? this.bags() : null;
       if (b && b.free <= (cfg.minFreeSlots ?? 2)) {
         if (cfg.vendor) {
           const sr = await this.sellAt(cfg.vendor);

@@ -28,7 +28,13 @@ public class TelegramApi {
     /** Лимит Telegram на длину сообщения — 4096 символов; оставляем запас под многоточие. */
     static final int MAX_TEXT = 4000;
 
-    private final HttpClient http = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(10)).build();
+    /** Паузы между повторами отправки при сетевых сбоях. */
+    long[] retryDelaysMs = {2000, 5000, 15000};
+
+    /** Свежий HTTP/1.1-клиент на каждый запрос: общее HTTP/2-соединение «залипало» после долгого опроса. */
+    private static HttpClient newClient() {
+        return HttpClient.newBuilder().version(HttpClient.Version.HTTP_1_1).connectTimeout(Duration.ofSeconds(10)).build();
+    }
     private final String baseUrl;
     private final String token;
 
@@ -71,7 +77,18 @@ public class TelegramApi {
         params.put("chat_id", chatId);
         params.put("text", truncate(text));
         if (replyMarkup != null) params.put("reply_markup", replyMarkup);
-        call("sendMessage", params, Duration.ofSeconds(20));
+        for (int attempt = 0; ; attempt++) {
+            try {
+                call("sendMessage", params, Duration.ofSeconds(20));
+                return;
+            } catch (ApiException e) {
+                throw e;                                       // ответ Telegram «нет» — повтор не поможет
+            } catch (IOException e) {
+                if (attempt >= retryDelaysMs.length) throw e;  // сеть: повторить через паузу
+                log.warn("Telegram: отправка не удалась ({}), повтор {}", e.getMessage(), attempt + 1);
+                Thread.sleep(retryDelaysMs[attempt]);
+            }
+        }
     }
 
     /** Проверка токена: имя бота или исключение. */
@@ -93,7 +110,7 @@ public class TelegramApi {
                 .build();
         HttpResponse<String> response;
         try {
-            response = http.send(request, HttpResponse.BodyHandlers.ofString());
+            response = newClient().send(request, HttpResponse.BodyHandlers.ofString());
         } catch (IOException e) {
             throw new IOException(redact(e.getClass().getSimpleName() + ": " + e.getMessage()));
         }

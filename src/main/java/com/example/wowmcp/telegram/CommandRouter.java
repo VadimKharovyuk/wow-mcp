@@ -63,6 +63,7 @@ public final class CommandRouter {
             case "стоп" -> Command.of("stop");
             case "продай", "продать" -> Command.of("sell");
             case "воскресни", "воскреснуть" -> Command.of("revive");
+            case "призови питомца", "питомец", "призови пета", "пет" -> Command.of("pet");
             case "отдохни", "отдых" -> Command.of("rest");
             case "лут" -> Command.of("loot");
             case "бей" -> Command.of("fight");
@@ -94,6 +95,7 @@ public final class CommandRouter {
             case "hunt" -> Command.of("hunt");
             case "sell" -> Command.of("sell");
             case "revive" -> Command.of("revive");
+            case "pet" -> Command.of("pet");
             case "rest" -> Command.of("rest");
             case "loot" -> Command.of("loot");
             case "fight" -> Command.of("fight");

@@ -27,7 +27,7 @@ public class CommandExecutor {
             Команды (можно и по-русски, как в OpenCode):
             статус · стоп · жди
             качайся [без лута] [по точкам] [N убийств] [M минут] · иди качайся
-            продай · воскресни · отдохни · лут · бей
+            продай · воскресни · призови питомца · отдохни · лут · бей
             сумки · места · маршруты · умения · ротация
             иди к ИМЯ · иди по маршруту ИМЯ · запомни место ИМЯ · запомни торговца ИМЯ
             иди X Y · беги X Y · построй дороги · перезагрузи бота
@@ -71,6 +71,7 @@ public class CommandExecutor {
                 case "hunt" -> MessageFormatter.toolResult(hunt.hunt(null, null, null));
                 case "sell" -> MessageFormatter.toolResult(inventory.sellNow());
                 case "revive" -> MessageFormatter.toolResult(actions.revive());
+                case "pet" -> MessageFormatter.toolResult(actions.callPet());
                 case "rest" -> MessageFormatter.toolResult(actions.rest());
                 case "loot" -> MessageFormatter.toolResult(actions.loot());
                 case "fight" -> MessageFormatter.toolResult(actions.fight());
