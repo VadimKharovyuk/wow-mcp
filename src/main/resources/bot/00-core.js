@@ -57,6 +57,8 @@ window.KEYS = { W:['KeyW','w',87], A:['KeyA','a',65], D:['KeyD','d',68], S:['Key
   SPACE:['Space',' ',32], TAB:['Tab','Tab',9] };
 for (let n = 1; n <= 9; n++) KEYS[n] = ['Digit' + n, '' + n, 48 + n];
 KEYS[0] = ['Digit0', '0', 48];
+// буквы A–Z (баффы паладина на G/T/Y и т. п.); W/A/S/D уже заданы выше
+for (let c = 65; c <= 90; c++) { const L = String.fromCharCode(c); if (!KEYS[L]) KEYS[L] = ['Key' + L, L.toLowerCase(), c]; }
 KEYS['0'] = KEYS[0];
 
 // ===== базовый объект бота =====

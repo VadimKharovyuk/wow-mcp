@@ -87,6 +87,7 @@ Object.assign(bot, {
     // стрелок: питомец после смерти обычно пропадает — вызвать снова
     const cc = this.combatCfg && this.combatCfg();
     if (cc && cc.petCallKey && !aborted()) await this.ensurePet(cc);
+    this.buffAt = {};                                   // после смерти баффы слетели — гринд навесит заново
     return { result: 'воскрешён', deathPos, seconds, distance, rest: rest.result, ...this.state() };
   },
 });

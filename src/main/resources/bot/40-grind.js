@@ -163,7 +163,28 @@ Object.assign(bot, {
     return q && q.exists && q.dead ? 'dead' : 'none';
   },
 
-  // Отдельная задача «призови питомца»: нет питомца — вызвать, мёртв — воскресить; уже с нами — ничего не делать.
+  // Баффы профиля (cc.buffs): вне боя, не во время каста, с маной. Время последнего нажатия — this.buffAt[key];
+  // после воскрешения оно сбрасывается (баффы слетают). Ошибка нажатия повторяется не раньше чем через минуту.
+  async ensureBuffs(cc) {
+    if (!cc || !cc.buffs || !cc.buffs.length) return;
+    this.buffAt = this.buffAt || {};
+    const stopped = () => !this.grinding && this.job.name !== 'revive' && this.job.name !== 'summonPet';
+    for (const b of cc.buffs) {
+      if (stopped()) return;
+      const s = this.state();
+      if (s.fight || s.dead || s.ghost || this.casting()) return;
+      if (s.manaPct < 0.15) return;
+      if (Date.now() - (this.buffAt[b.key] || 0) < b.everyMs) continue;
+      this.buffAt[b.key] = Date.now();
+      await this.tap(b.key);
+      await sleep(600);
+      await this.waitFor(() => !this.casting(), 8000, 250, stopped);
+      await sleep(1600);                                   // общая перезарядка между баффами
+      if (this.state().fight) return;
+    }
+  },
+
+  // Отдельная задача «призови питомца": нет питомца — вызвать, мёртв — воскресить; уже с нами — ничего не делать.
   async summonPet() {
     const cc = this.combatCfg && this.combatCfg();
     if (!cc || !cc.petCallKey) return { result: 'у этого профиля нет питомца', ...this.state() };
@@ -408,6 +429,8 @@ Object.assign(bot, {
         await this.rest({ manaBelow: cfg.manaBelow, healKey: cfg.healKey, healSpell: cfg.healSpell, drinkKey: cfg.drinkKey });
         st.rests++; continue;
       }
+      // баффы профиля (паладин): держим всегда, вне боя
+      if (cc0 && cc0.buffs) await this.ensureBuffs(cc0);
       // стрелок: боеприпасы и питомец (пауза, если питомец мёртв)
       if (cc0 && cc0.ranged) {
         const ammo = (this.deathInfo() || {}).ammo;
