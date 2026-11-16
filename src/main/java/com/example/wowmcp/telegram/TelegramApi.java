@@ -91,6 +91,13 @@ public class TelegramApi {
         }
     }
 
+    /** Меню команд (список, который Telegram показывает при вводе «/»). Пары: {команда, описание}. */
+    public void setMyCommands(List<String[]> commands) throws IOException, InterruptedException {
+        List<Map<String, String>> list = new ArrayList<>();
+        for (String[] c : commands) list.add(Map.of("command", c[0], "description", c[1]));
+        call("setMyCommands", Map.of("commands", list), Duration.ofSeconds(15));
+    }
+
     /** Проверка токена: имя бота или исключение. */
     public String getMe() throws IOException, InterruptedException {
         JsonNode me = call("getMe", Map.of(), Duration.ofSeconds(15));

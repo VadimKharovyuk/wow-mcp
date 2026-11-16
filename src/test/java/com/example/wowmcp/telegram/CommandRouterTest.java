@@ -23,6 +23,11 @@ class CommandRouterTest {
         assertThat(p("сядь на коня").name()).isEqualTo("mount");
         assertThat(p("слезь").name()).isEqualTo("dismount");
         assertThat(p("покажи дороги").name()).isEqualTo("roads_list");
+        assertThat(p("ошибки").name()).isEqualTo("errors");
+        assertThat(p("ошибки 2 часа лут").name()).isEqualTo("errors");
+        assertThat(p("ошибки 2 часа лут").arg()).isEqualTo("2 часа лут");
+        assertThat(p("логи").name()).isEqualTo("logs");
+        assertThat(p("/errors 30 минут").arg()).isEqualTo("30 минут");
         assertThat(p("дорога 2").name()).isEqualTo("go_road");
         assertThat(p("дорога 2").arg()).isEqualTo("2");
         assertThat(p("иди качайся").name()).isEqualTo("hunt");

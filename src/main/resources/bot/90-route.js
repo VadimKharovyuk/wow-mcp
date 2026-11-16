@@ -31,7 +31,19 @@ Object.assign(bot, {
     const s0 = this.state();
     let prev = { x: s0.x, y: s0.y, node: false };
     let skipped = 0, skippedTotal = 0, fights = 0;
+    // верхом: садимся, когда боя нет (в начале и после каждого боя); слезаем в конце, только если коня вызвал бот
+    let botMounted = false;
+    const wasMounted = this.mounted && this.mounted();
+    const rideUp = async () => {
+      const st = this.state();
+      if (!this.grinding && this.job.status !== 'running') return;          // остановили
+      if (st.fight || (this.mounted && this.mounted())) return;
+      const far = points.some(q => Math.hypot(st.x - q.x, st.y - q.y) > 0.6);
+      if (far && await this.mountUp()) botMounted = true;
+    };
     const end = (result, extra = {}) => { this.release(); this.routeProgress = null; return { result, route: name, points: n, skipped: skippedTotal, ...extra, ...this.state() }; };
+    const endRide = async (result, extra) => { if (botMounted && !wasMounted) await this.dismount(); return end(result, extra); };
+    await rideUp();
     for (let i = 0; i < n; i++) {
       const p = points[i];
       this.routeProgress.i = i + 1;
@@ -55,6 +67,7 @@ Object.assign(bot, {
             if (f2.result !== 'бой окончен') return end(f2.result);
           }
         }
+        await rideUp();                        // после боя и лута — снова на коня
         i--;                                   // вернуться к той же точке
         continue;
       }
@@ -71,6 +84,6 @@ Object.assign(bot, {
       }
       return end(r.result, { point: i + 1 });  // остановлен вручную, нет координат и т.п.
     }
-    return end('маршрут пройден');
+    return endRide('маршрут пройден');
   },
 });

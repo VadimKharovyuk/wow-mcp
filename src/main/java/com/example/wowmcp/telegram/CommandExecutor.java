@@ -6,6 +6,7 @@ import com.example.wowmcp.tools.BotActionTools;
 import com.example.wowmcp.tools.GrindTools;
 import com.example.wowmcp.tools.HuntTools;
 import com.example.wowmcp.tools.InventoryTools;
+import com.example.wowmcp.tools.LogTools;
 import com.example.wowmcp.tools.PlaceTools;
 import com.example.wowmcp.tools.RecordingTools;
 import com.example.wowmcp.tools.RoadTools;
@@ -28,7 +29,7 @@ public class CommandExecutor {
             статус · стоп · жди
             качайся [без лута] [по точкам] [N убийств] [M минут] · иди качайся
             продай · воскресни · призови питомца · сядь на коня · слезь · отдохни · лут · бей
-            сумки · места · маршруты · покажи дороги · дорога N · умения · ротация
+            сумки · ошибки [2 часа] [лут] [паладин] · логи · места · маршруты · покажи дороги · дорога N · умения · ротация
             иди к ИМЯ · иди по маршруту ИМЯ · запомни место ИМЯ · запомни торговца ИМЯ
             иди X Y · беги X Y · построй дороги · перезагрузи бота
             /id — показать ваш chat id""";
@@ -42,10 +43,11 @@ public class CommandExecutor {
     private final RecordingTools recording;
     private final RotationTools rotation;
     private final RoadTools roads;
+    private final LogTools logTools;
 
     public CommandExecutor(GameBridge bridge, BotActionTools actions, GrindTools grind, HuntTools hunt,
                            InventoryTools inventory, PlaceTools places, RecordingTools recording,
-                           RotationTools rotation, RoadTools roads) {
+                           RotationTools rotation, RoadTools roads, LogTools logTools) {
         this.bridge = bridge;
         this.actions = actions;
         this.grind = grind;
@@ -55,6 +57,7 @@ public class CommandExecutor {
         this.recording = recording;
         this.rotation = rotation;
         this.roads = roads;
+        this.logTools = logTools;
     }
 
     /** Выполнить команду и вернуть текст ответа. Блокирует поток до ответа игры — вызывать не из потока опроса. */
@@ -77,6 +80,8 @@ public class CommandExecutor {
                 case "rest" -> MessageFormatter.toolResult(actions.rest());
                 case "loot" -> MessageFormatter.toolResult(actions.loot());
                 case "fight" -> MessageFormatter.toolResult(actions.fight());
+                case "errors" -> logTools.render(true, c.arg());
+                case "logs" -> logTools.render(false, c.arg());
                 case "bags" -> MessageFormatter.toolResult(inventory.bags());
                 case "places" -> MessageFormatter.toolResult(places.places());
                 case "routes" -> MessageFormatter.toolResult(places.routes());

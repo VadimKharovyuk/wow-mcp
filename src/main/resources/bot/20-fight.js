@@ -235,6 +235,8 @@ Object.assign(bot, {
             (this.healLog = this.healLog || []).push({ spell: e.spell, hp: Math.round(hpPct * 100), fight: !!s.fight,
               mounted: !!(this.mounted && this.mounted()), at: new Date().toTimeString().slice(0, 8) });
             if (this.healLog.length > 10) this.healLog.shift();
+            this.log && this.log('info', 'heal', 'аварийное лечение ' + e.spell + ': HP ' + Math.round(hpPct * 100) + '%',
+                { spell: e.spell, hp: Math.round(hpPct * 100), inFight: !!s.fight, mounted: !!(this.mounted && this.mounted()) });
             this.pressLog[e.spell] = Date.now(); this.pressGT[e.spell] = s.time;
             this.warnings.push('лечение (' + e.spell + '): HP ' + Math.round(hpPct * 100) + '%');
             if (this.warnings.length > 20) this.warnings.shift();

@@ -38,6 +38,7 @@ public class EventCollector {
     private final PathRepository paths;
     private final ProfileRepository profiles;
     private final RotationLearner learner;
+    private final BotLogRepository botLog;
     private final ObjectMapper json = new ObjectMapper();
 
     /** Накопители для минутного лога «события: cast=N, kill=M, вставлено cast=K». */
@@ -48,7 +49,7 @@ public class EventCollector {
     private final java.util.concurrent.atomic.AtomicInteger statDrains = new java.util.concurrent.atomic.AtomicInteger();
     private final java.util.concurrent.atomic.AtomicInteger statInsertErrors = new java.util.concurrent.atomic.AtomicInteger();
 
-    public EventCollector(GameBridge bridge, Database db, CastHistoryRepository casts, KillRepository kills, SpellIdResolver spellIds, HuntRepository hunts, LeaderLock leader, org.springframework.context.ApplicationEventPublisher publisher, GameEventRepository gameEvents, com.example.wowmcp.roads.RoadService roads, PathRepository paths, ProfileRepository profiles, RotationLearner learner) {
+    public EventCollector(GameBridge bridge, Database db, CastHistoryRepository casts, KillRepository kills, SpellIdResolver spellIds, HuntRepository hunts, LeaderLock leader, org.springframework.context.ApplicationEventPublisher publisher, GameEventRepository gameEvents, com.example.wowmcp.roads.RoadService roads, PathRepository paths, ProfileRepository profiles, RotationLearner learner, BotLogRepository botLog) {
         this.bridge = bridge;
         this.db = db;
         this.casts = casts;
@@ -61,6 +62,7 @@ public class EventCollector {
         this.roads = roads;
         this.paths = paths;
         this.profiles = profiles;
+        this.botLog = botLog;
         this.learner = learner;
     }
 
@@ -72,6 +74,8 @@ public class EventCollector {
     /** Поля, которые лежат в колонках, а не в data. */
     private static final java.util.Set<String> EVENT_COLUMNS =
             java.util.Set.of("type", "source", "jobUid", "zone", "x", "y", "at");
+    private static final java.util.Set<String> LOG_COLUMNS =
+            java.util.Set.of("type", "profile", "level", "cat", "msg", "jobUid", "zone", "x", "y", "at");
     private static final java.util.Set<String> JOB_COLUMNS =
             java.util.Set.of("type", "phase", "uid", "name", "status", "result", "at");
 
@@ -194,6 +198,13 @@ public class EventCollector {
                             asDouble(ev.get("x")), asDouble(ev.get("y")), at == 0 ? System.currentTimeMillis() : at,
                             dataOf(ev, EVENT_COLUMNS));
                 }
+            } else if ("log".equals(type)) {
+                if (db.isEnabled()) {
+                    long at = asLong(ev.get("at"));
+                    botLog.insert(at == 0 ? System.currentTimeMillis() : at, str(ev.get("profile")), str(ev.get("level")),
+                            str(ev.get("cat")), str(ev.get("msg")), asInt(ev.get("zone")), asDouble(ev.get("x")),
+                            asDouble(ev.get("y")), str(ev.get("jobUid")), dataOf(ev, LOG_COLUMNS));
+                }
             } else if ("road".equals(type)) {
                 if (db.isEnabled()) {
                     Integer zone = asInt(ev.get("zone"));
@@ -279,6 +290,14 @@ public class EventCollector {
                 log.warn("Автообучение не удалось: {}", e.getMessage());
             }
         }
+    }
+
+    /** Раз в сутки: журнал бота хранится {@link BotLogRepository#KEEP_DAYS} дней. */
+    @Scheduled(fixedDelay = 24 * 3_600_000L, initialDelay = 120_000)
+    public void purgeBotLog() {
+        if (!leader.isLeader()) return;
+        int n = botLog.purgeOld();
+        if (n > 0) log.info("лог бота: удалено старых записей {}", n);
     }
 
     /**

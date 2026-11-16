@@ -346,10 +346,13 @@ window.bot = {
     const finished = (status, r) => this.events.push({ type: 'job', phase: 'end', uid, name, status: (r && r.status) || status,
         result: r && r.result ? String(r.result).slice(0, 200) : null, stats: (r && r.stats) || null,
         hunt: (r && r.hunt) || null, at: Date.now() });
+    this.log && this.log('info', 'job', 'старт: ' + name);
     // Promise.resolve().then: синхронное исключение или не-промис тоже не оставят задачу в 'running'
     Promise.resolve().then(() => this[name](...args))
-        .then(r => { if (this.job.id === id) { this.job = { name, status: 'done', id, uid, ...r }; finished('done', r); } })
-        .catch(e => { if (this.job.id === id) { this.job = { name, status: 'error', id, uid, error: '' + e }; finished('error', { result: '' + e }); } })
+        .then(r => { if (this.job.id === id) { this.job = { name, status: 'done', id, uid, ...r }; finished('done', r);
+            this.log && this.log('info', 'job', 'конец: ' + name + ' — ' + String((r && r.result) || 'done').slice(0, 150)); } })
+        .catch(e => { if (this.job.id === id) { this.job = { name, status: 'error', id, uid, error: '' + e }; finished('error', { result: '' + e });
+            this.log && this.log('error', 'error', 'исключение в задаче ' + name + ': ' + e); } })
         .finally(() => { if (this.jobSeq === id) this.jobBusy = false; });
     return 'запущено: ' + name;
   },

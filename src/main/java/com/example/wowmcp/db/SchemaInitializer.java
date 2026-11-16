@@ -184,6 +184,22 @@ final class SchemaInitializer {
                   data    jsonb
                 )""");
         jdbc.execute("CREATE INDEX IF NOT EXISTS game_event_type_ts_idx ON game_event (type, ts)");
+        jdbc.execute("""
+                CREATE TABLE IF NOT EXISTS bot_log (
+                  id       bigserial PRIMARY KEY,
+                  ts       timestamptz NOT NULL,
+                  profile  text,
+                  level    text        NOT NULL,
+                  category text        NOT NULL,
+                  message  text,
+                  zone     int,
+                  x        real,
+                  y        real,
+                  job_uid  text,
+                  data     jsonb
+                )""");
+        jdbc.execute("CREATE INDEX IF NOT EXISTS bot_log_profile_ts_idx ON bot_log (profile, ts)");
+        jdbc.execute("CREATE INDEX IF NOT EXISTS bot_log_ts_idx ON bot_log (ts)");
         jdbc.execute("ALTER TABLE mob_kill ADD COLUMN IF NOT EXISTS job_uid text");
     }
 }

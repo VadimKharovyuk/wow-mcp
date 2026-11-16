@@ -11,3 +11,4 @@
 80-death.js
 90-route.js
 95-hunt.js
+99-log.js

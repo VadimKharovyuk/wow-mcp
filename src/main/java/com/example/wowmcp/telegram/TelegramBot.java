@@ -31,12 +31,38 @@ public class TelegramBot {
     private static final int POLL_SECONDS = 25;
     private static final long UNAUTHORIZED_REPLY_GAP_MS = 10 * 60 * 1000;
 
+    /** Меню «/»: команда (латиницей) и описание. Эти слэш-команды разбирает {@link CommandRouter}. */
+    static final List<String[]> MENU = List.of(
+            new String[]{"status", "Статус персонажа"},
+            new String[]{"stop", "Остановить всё"},
+            new String[]{"grind", "Качаться вокруг места (N убийств / M минут)"},
+            new String[]{"patrol", "Качаться по точкам"},
+            new String[]{"hunt", "Выбрать место охоты и качаться"},
+            new String[]{"errors", "Ошибки бота (2 часа, лут, паладин)"},
+            new String[]{"logs", "Журнал бота (все события)"},
+            new String[]{"bags", "Сумки и деньги"},
+            new String[]{"sell", "Продать хлам и починиться"},
+            new String[]{"revive", "Воскреснуть"},
+            new String[]{"mount", "Сесть на коня"},
+            new String[]{"dismount", "Слезть с коня"},
+            new String[]{"pet", "Призвать питомца"},
+            new String[]{"rest", "Отдохнуть (HP и мана)"},
+            new String[]{"roadslist", "Список дорог"},
+            new String[]{"road", "Дорога N: ехать и пройти"},
+            new String[]{"places", "Мои места"},
+            new String[]{"routes", "Маршруты"},
+            new String[]{"spells", "Умения на панели"},
+            new String[]{"rotation", "Ротация"},
+            new String[]{"reload", "Перезагрузить бота"},
+            new String[]{"help", "Список команд"});
+
     /** Постоянная клавиатура внизу чата. */
     static final Map<String, Object> KEYBOARD = Map.of(
             "keyboard", List.of(
                     List.of(Map.of("text", "Статус"), Map.of("text", "Качайся"), Map.of("text", "Стоп")),
                     List.of(Map.of("text", "Иди качайся"), Map.of("text", "Продай"), Map.of("text", "Воскресни")),
-                    List.of(Map.of("text", "Сумки"), Map.of("text", "Места"), Map.of("text", "Помощь"))),
+                    List.of(Map.of("text", "Сумки"), Map.of("text", "Места"), Map.of("text", "Помощь")),
+                    List.of(Map.of("text", "Ошибки"), Map.of("text", "Логи"))),
             "resize_keyboard", true);
 
     private final TelegramProperties props;
@@ -117,6 +143,11 @@ public class TelegramBot {
                     offset = skipPending(api);
                     wasLeader = true;
                     log.info("Telegram: этот процесс опрашивает бота");
+                    try {
+                        api.setMyCommands(MENU);
+                    } catch (Exception e) {
+                        log.warn("Telegram: меню команд не обновлено: {}", e.getMessage());   // не мешает работе
+                    }
                     broadcast("🟢 Контроллер запущен. Напишите «помощь».");
                 }
                 List<JsonNode> updates = api.getUpdates(offset, POLL_SECONDS);
