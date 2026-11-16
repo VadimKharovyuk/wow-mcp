@@ -101,7 +101,7 @@ public final class MessageFormatter {
     /** Конец задачи бота. Короткие служебные задачи не интересны — возвращает null. */
     public static String jobEnd(Map<String, Object> ev) {
         String name = String.valueOf(ev.get("name"));
-        if (!List.of("grind", "hunt", "goRoute", "sellAt", "revive").contains(name)) return null;
+        if (!List.of("grind", "hunt", "goRoute", "sellAt", "revive", "goRoad").contains(name)) return null;
         String result = ev.get("result") == null ? "" : String.valueOf(ev.get("result"));
         String status = String.valueOf(ev.get("status"));
         String icon = switch (status) {
@@ -133,14 +133,20 @@ public final class MessageFormatter {
             case "goRoute" -> "Маршрут";
             case "sellAt" -> "Продажа";
             case "revive" -> "Воскрешение";
+            case "goRoad" -> "Дорога";
             default -> job;
         };
     }
 
     /** Медь → «1з 23с 45м». */
-    static String coins(long copper) {
+    /** Медь → «12з 3с 50м»; нулевые части пропускаются, 0 → «0м». */
+    public static String coins(long copper) {
         long g = copper / 10000, s = copper / 100 % 100, c = copper % 100;
-        return (g != 0 ? g + "з " : "") + (g != 0 || s != 0 ? s + "с " : "") + c + "м";
+        StringBuilder sb = new StringBuilder();
+        if (g != 0) sb.append(g).append("з ");
+        if (s != 0) sb.append(s).append("с ");
+        if (c != 0 || sb.length() == 0) sb.append(c).append("м");
+        return sb.toString().trim();
     }
 
     private static String num(JsonNode n) {

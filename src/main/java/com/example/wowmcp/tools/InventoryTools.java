@@ -5,6 +5,7 @@ import com.example.wowmcp.db.KeepItemRepository;
 import com.example.wowmcp.db.VendorRepository;
 import com.example.wowmcp.game.GameBridge;
 import com.example.wowmcp.game.GameState;
+import com.example.wowmcp.telegram.MessageFormatter;
 import org.springframework.ai.tool.annotation.Tool;
 import org.springframework.ai.tool.annotation.ToolParam;
 import org.springframework.stereotype.Component;
@@ -41,7 +42,19 @@ public class InventoryTools {
         bridge.ensureReady();
         Object raw = bridge.eval("() => JSON.stringify(bot.bags ? bot.bags() : {})");
         try {
-            return JSON.writeValueAsString(Map.of("bags", JSON.readValue(String.valueOf(raw), Object.class)));
+            Object parsed = JSON.readValue(String.valueOf(raw), Object.class);
+            if (parsed instanceof Map<?, ?> m) {
+                Map<String, Object> out = new LinkedHashMap<>();
+                m.forEach((k, v) -> {
+                    out.put(String.valueOf(k), v);
+                    if ("money".equals(k) && v instanceof Number n)
+                        out.put("moneyText", MessageFormatter.coins(n.longValue()));
+                    if ("repairCost".equals(k) && v instanceof Number n)
+                        out.put("repairCostText", MessageFormatter.coins(n.longValue()));
+                });
+                parsed = out;
+            }
+            return JSON.writeValueAsString(Map.of("bags", parsed));
         } catch (RuntimeException e) {
             return JSON.writeValueAsString(Map.of("bags", raw));
         }

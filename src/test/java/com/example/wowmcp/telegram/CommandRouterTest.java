@@ -22,6 +22,9 @@ class CommandRouterTest {
         assertThat(p("/pet").name()).isEqualTo("pet");
         assertThat(p("сядь на коня").name()).isEqualTo("mount");
         assertThat(p("слезь").name()).isEqualTo("dismount");
+        assertThat(p("покажи дороги").name()).isEqualTo("roads_list");
+        assertThat(p("дорога 2").name()).isEqualTo("go_road");
+        assertThat(p("дорога 2").arg()).isEqualTo("2");
         assertThat(p("иди качайся").name()).isEqualTo("hunt");
         assertThat(p("помощь").name()).isEqualTo("help");
         assertThat(p("перезагрузи бота").name()).isEqualTo("reload");

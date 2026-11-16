@@ -28,6 +28,8 @@ public class PlaceTools {
     private final PlaceRepository places;
     private final RouteRepository routes;
     private final Navigator navigator;
+    /** Порядок маршрутов из последнего «покажи дороги»: «дорога N» берёт отсюда. */
+    private volatile List<String> lastRoads = List.of();
 
     public PlaceTools(GameBridge bridge, Database db, PlaceRepository places, RouteRepository routes,
                       Navigator navigator) {
@@ -139,6 +141,85 @@ public class PlaceTools {
             list.add(m);
         }
         return JSON.writeValueAsString(Map.of("routes", list));
+    }
+
+    @Tool(name = "roads_list", description = """
+            Список «дорог» (записанных маршрутов) текущей зоны: номер, откуда → куда (по ближайшим сохранённым местам), \
+            длина и расстояние до начала. Выбрать — go_road с номером или именем.""")
+    public String roadsList() {
+        if (!db.isEnabled()) {
+            return jsonResult("база не настроена — дороги недоступны");
+        }
+        GameState state = GameState.parse(bridge.report());
+        List<Map<String, Object>> placeList = places.listByZone(state.zone());
+        List<String> order = new ArrayList<>();
+        StringBuilder sb = new StringBuilder("Дороги зоны " + state.zone() + ":");
+        for (String[] r : routes.listNames()) {
+            List<Point> pts = routes.points(r[1]);
+            if (pts.isEmpty() || pts.get(0).zone() != state.zone()) continue;
+            Point a = pts.get(0), b = pts.get(pts.size() - 1);
+            order.add(r[0]);
+            sb.append("\n").append(order.size()).append(". ").append(r[0]).append(" — ")
+              .append(endName(placeList, a)).append(" → ").append(endName(placeList, b))
+              .append(" · длина ").append(round1(RoutePlanner.length(pts)))
+              .append(" · до начала ").append(round1(Math.hypot(a.x() - state.x(), a.y() - state.y())));
+        }
+        lastRoads = List.copyOf(order);
+        if (order.isEmpty()) {
+            return jsonResult("в этой зоне нет записанных дорог (запиши дорогу → стоп запись ИМЯ)");
+        }
+        sb.append("\nВыбери: «дорога N» — бот поедет к началу и пройдёт её.");
+        return jsonResult(sb.toString());
+    }
+
+    @Tool(name = "go_road", description = """
+            Пройти дорогу из списка roads_list: по номеру («2») или по имени маршрута. Сначала едет к началу \
+            (верхом, если далеко и конь доступен), затем идёт по точкам, в конце слезает. Работает в фоне — wait_job.""")
+    public String goRoad(
+            @ToolParam(description = "Номер из списка roads_list или имя маршрута") String road,
+            @ToolParam(required = false, description = "Идти с конца к началу, true/false (по умолчанию от начала)")
+            Boolean reverse) {
+        requireNotBlank(road, "road");
+        if (!db.isEnabled()) {
+            return jsonResult("база не настроена — дороги недоступны");
+        }
+        String key = road.strip();
+        if (key.matches("\\d{1,3}")) {
+            int n = Integer.parseInt(key);
+            List<String> order = lastRoads;
+            if (n < 1 || n > order.size()) {
+                return jsonResult("нет дороги №" + n + (order.isEmpty() ? " — сначала «покажи дороги»" : " (есть 1–" + order.size() + ")"));
+            }
+            key = order.get(n - 1);
+        } else {
+            key = Names.normalize(key);
+        }
+        String session = routes.sessionOf(key);
+        if (session == null) {
+            return jsonResult("дорога «" + key + "» не найдена (список: покажи дороги)");
+        }
+        List<Point> pts = routes.points(session);
+        GameState state = GameState.parse(bridge.report());
+        if (pts.isEmpty() || pts.get(0).zone() != state.zone()) {
+            return jsonResult("дорога «" + key + "» не в этой зоне");
+        }
+        List<Point> seq = new ArrayList<>(RoutePlanner.thin(pts));
+        if (Boolean.TRUE.equals(reverse)) java.util.Collections.reverse(seq);
+        String started = bridge.start("goRoad", List.of(pointsArg(seq), Map.of("name", key)));
+        return JSON.writeValueAsString(Map.of("result", started, "route", key, "points", seq.size(),
+                "from", Map.of("x", round1(seq.get(0).x()), "y", round1(seq.get(0).y())),
+                "to", Map.of("x", round1(seq.get(seq.size() - 1).x()), "y", round1(seq.get(seq.size() - 1).y()))));
+    }
+
+    /** Имя места рядом с точкой (в пределах 1 ед.) или координаты. */
+    private static String endName(List<Map<String, Object>> placeList, Point p) {
+        String best = null;
+        double bd = 1.0;
+        for (Map<String, Object> pl : placeList) {
+            double d = Math.hypot(((Number) pl.get("x")).doubleValue() - p.x(), ((Number) pl.get("y")).doubleValue() - p.y());
+            if (d <= bd) { bd = d; best = String.valueOf(pl.get("name")); }
+        }
+        return best != null ? best : "(" + round1(p.x()) + "; " + round1(p.y()) + ")";
     }
 
     @Tool(name = "go_route", description = """

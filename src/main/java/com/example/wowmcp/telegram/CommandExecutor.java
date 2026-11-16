@@ -28,7 +28,7 @@ public class CommandExecutor {
             статус · стоп · жди
             качайся [без лута] [по точкам] [N убийств] [M минут] · иди качайся
             продай · воскресни · призови питомца · сядь на коня · слезь · отдохни · лут · бей
-            сумки · места · маршруты · умения · ротация
+            сумки · места · маршруты · покажи дороги · дорога N · умения · ротация
             иди к ИМЯ · иди по маршруту ИМЯ · запомни место ИМЯ · запомни торговца ИМЯ
             иди X Y · беги X Y · построй дороги · перезагрузи бота
             /id — показать ваш chat id""";
@@ -80,6 +80,8 @@ public class CommandExecutor {
                 case "bags" -> MessageFormatter.toolResult(inventory.bags());
                 case "places" -> MessageFormatter.toolResult(places.places());
                 case "routes" -> MessageFormatter.toolResult(places.routes());
+                case "roads_list" -> MessageFormatter.toolResult(places.roadsList());
+                case "go_road" -> MessageFormatter.toolResult(places.goRoad(c.arg(), null));
                 case "go_place" -> MessageFormatter.toolResult(places.goPlace(c.arg()));
                 case "go_route" -> MessageFormatter.toolResult(places.goRoute(c.arg(), null));
                 case "remember_place" -> MessageFormatter.toolResult(places.rememberPlace(c.arg(), null));

@@ -49,7 +49,7 @@ public final class CommandRouter {
         // с аргументом-именем
         for (String[] p : new String[][]{
                 {"запомни место ", "remember_place"}, {"запомни торговца ", "remember_vendor"},
-                {"иди по маршруту ", "go_route"}, {"иди к ", "go_place"}, {"иди в ", "go_place"},
+                {"иди по маршруту ", "go_route"}, {"дорога ", "go_road"}, {"иди к ", "go_place"}, {"иди в ", "go_place"},
                 {"стоп запись ", "record_stop"}, {"профиль ", "profile"}}) {
             if (low.startsWith(p[0]) && low.length() > p[0].length()) {
                 return Command.of(p[1], text.substring(p[0].length()).strip());
@@ -72,6 +72,7 @@ public final class CommandRouter {
             case "сумки" -> Command.of("bags");
             case "места", "места куда", "мои места" -> Command.of("places");
             case "маршруты" -> Command.of("routes");
+            case "покажи дороги", "дороги", "список дорог" -> Command.of("roads_list");
             case "запиши дорогу", "запись" -> Command.of("record_start");
             case "стоп запись" -> Command.of("record_stop");
             case "построй дороги" -> Command.of("roads");
@@ -106,6 +107,8 @@ public final class CommandRouter {
             case "bags" -> Command.of("bags");
             case "places" -> Command.of("places");
             case "routes" -> Command.of("routes");
+            case "roadslist" -> Command.of("roads_list");
+            case "road" -> arg.isBlank() ? Command.of(UNKNOWN) : Command.of("go_road", arg);
             case "goplace" -> arg.isBlank() ? Command.of(UNKNOWN) : Command.of("go_place", arg);
             case "goroute" -> arg.isBlank() ? Command.of(UNKNOWN) : Command.of("go_route", arg);
             case "remember" -> arg.isBlank() ? Command.of(UNKNOWN) : Command.of("remember_place", arg);

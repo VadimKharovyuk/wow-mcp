@@ -13,6 +13,15 @@ Object.assign(bot, {
     if (ok && (a.node !== b.node) && Math.hypot(a.x - b.x, a.y - b.y) <= 6) this.roadEvent('learn', zone, a, b);
   },
 
+  // Дорога из списка: к началу (верхом, если далеко), потом по точкам маршрута; в конце слезть с коня.
+  async goRoad(points, opts = {}) {
+    const s = this.state(), f = points[0];
+    if (f && Math.hypot(s.x - f.x, s.y - f.y) > 0.6) await this.mountUp();
+    const r = await this.goRoute(points, opts);
+    await this.dismount();
+    return r;
+  },
+
   // points: [{x, y, node?}] по порядку. opts: fight (отбиваться, иначе стоп при нападении), loot (после боя),
   // tolMid (допуск на промежуточных точках), roads/zone (учим граф). Застрял на точке — пропускаем;
   // две подряд — стоп с причиной и координатами. Застрял на ребре дороги — fails++ и прямо к цели.
