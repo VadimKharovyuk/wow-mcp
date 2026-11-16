@@ -28,7 +28,8 @@ public final class MessageFormatter {
         String state = r.path("dead").asBoolean() ? "💀 мёртв" : r.path("ghost").asBoolean() ? "👻 дух"
                 : r.path("fight").asBoolean() ? "⚔ в бою" : "🟢 жив";
         lines.add(state + " · зона " + r.path("zone").asInt() + " (" + num(r.path("x")) + "; " + num(r.path("y")) + ") · ур. "
-                + r.path("pLvl").asInt());
+                + r.path("pLvl").asInt()
+                + (r.path("xpPct").isNumber() ? " · опыт " + r.path("xpPct").asInt() + "% (до след. " + r.path("xpLeftPct").asInt() + "%)" : ""));
         lines.add("❤ HP " + r.path("hpPct").asInt() + "% · 💧 мана " + Math.round(r.path("manaPct").asDouble() * 100) + "%");
         if (r.path("petExists").asBoolean() || r.path("petDead").asBoolean()) {
             lines.add("🐾 питомец " + (r.path("petDead").asBoolean() ? "мёртв" : Math.round(r.path("petHpPct").asDouble() * 100) + "%"));

@@ -355,6 +355,8 @@ window.bot = {
   },
   report() {
     const s = this.state();
-    return JSON.stringify({ job: this.job, hpPct: Math.round(s.hp / s.hpMax * 100), ...s, grind: this.grindStats || null, route: this.routeProgress || null, hunt: this.huntStats || null, warn: (this.warnings || []).slice(-5) });
+    const di = this.deathInfo();
+    const xp = di && di.xpMax > 0 ? Math.min(100, Math.round(di.xp / di.xpMax * 100)) : null;
+    return JSON.stringify({ job: this.job, hpPct: Math.round(s.hp / s.hpMax * 100), ...s, xpPct: xp, xpLeftPct: xp === null ? null : 100 - xp, grind: this.grindStats || null, route: this.routeProgress || null, hunt: this.huntStats || null, warn: (this.warnings || []).slice(-5) });
   }
 };
