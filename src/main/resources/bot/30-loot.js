@@ -40,21 +40,33 @@ Object.assign(bot, {
           sawDead = true;
           this.mouse(fx, fy, 'mousedown', 2); await sleep(60); this.mouse(fx, fy, 'mouseup', 2);
           const t0 = Date.now();
-          let sawWindow = false;
+          let sawWindow = false, retried = false, moved = false;
+          let lastPos = { x: this.state().x, y: this.state().y }, lastMoveAt = t0;
           while (Date.now() - t0 < timeout) {          // ждём: подбежал, окно открылось и закрылось
             await sleep(400);
             const s = this.state();
             if (s.fight) return { result: 'бой во время сбора', ...s };
             if (s.lootN > 0) sawWindow = true;
-            if (Date.now() - t0 > 1500 && s.lootN === 0) {
+            // персонаж ещё бежит к трупу (автоподход) — «пусто» объявлять рано
+            if (Math.hypot(s.x - lastPos.x, s.y - lastPos.y) > 0.01) { lastPos = { x: s.x, y: s.y }; lastMoveAt = Date.now(); moved = true; }
+            const settled = Date.now() - t0 > 1500 && Date.now() - lastMoveAt > 1200;
+            if (settled && s.lootN === 0) {
               // автолут забирает добычу мгновенно и окно можно не успеть увидеть — смотрим и на сумки/деньги
               const b1 = this.bags();
               const lo1 = (this.deathInfo() || {}).lootOpened;
               const opened = lo0 != null && lo1 != null && lo1 > lo0;   // окно добычи открывалось (даже мгновенный автолут)
               const gained = opened || sawWindow || b1.free < b0.free || (b1.money || 0) > (b0.money || 0);
+              if (!gained && !retried && (this.running || this.job.status === 'running')) {     // один повторный клик: первый мог не дойти
+                retried = true;
+                this.mouse(fx, fy, 'mousemove'); await sleep(70);
+                this.mouse(fx, fy, 'mousedown', 2); await sleep(60); this.mouse(fx, fy, 'mouseup', 2);
+                lastMoveAt = Date.now();
+                continue;
+              }
               if (!gained) {
                 this.events.push({ type: 'lootmiss', result: 'пустой труп или не открылся', source: 'bot',
-                                   zone: s.zone, x: s.x, y: s.y, at: Date.now() });
+                                   zone: s.zone, x: s.x, y: s.y, tDist: s.tDist, waitedMs: Date.now() - t0,
+                                   moved, retried, at: Date.now() });
               }
               return { result: gained ? 'добыча собрана' : 'пустой труп или не открылся', point: [fx, fy], ...s };
             }

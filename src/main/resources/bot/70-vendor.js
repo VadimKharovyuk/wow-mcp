@@ -29,6 +29,26 @@ Object.assign(bot, {
     return { ok: dist <= tol, dist };
   },
 
+  // Верхом (профиль с mountKey, паладин): сесть, если далеко и вне боя. Нет данных о состоянии (старый Lua) — не жмём:
+  // заклинание коня переключает, и мы бы слезли. Слезать безопасно: /dismount не переключатель.
+  async mountUp() {
+    const cc = this.combatCfg && this.combatCfg();
+    if (!cc || !cc.mountKey || this.qaddr == null) return false;
+    const s = this.state();
+    if (this.mounted() || s.fight || s.dead || s.ghost || this.casting()) return this.mounted();
+    await this.tap(cc.mountKey);
+    await sleep(600);
+    await this.waitFor(() => !this.casting(), 6000, 250, () => !this.running && this.job.status !== 'running');
+    await sleep(500);
+    if (!this.mounted()) { this.warnings.push('не удалось сесть на коня'); if (this.warnings.length > 20) this.warnings.shift(); }
+    return this.mounted();
+  },
+  async dismount() {
+    if (!this.mounted()) return;
+    await chat('/dismount');
+    await sleep(400);
+  },
+
   async _moveToVendorPoint(vendor, { tol = 0.07, maxLoops = 12 } = {}) {
     const fightBack = async () => {
       const f = await this.fight();
@@ -40,8 +60,10 @@ Object.assign(bot, {
     };
     for (let i = 0; i < maxLoops; i++) {
       // 1) грубо: moveTo с малым tol кружит вокруг точки, поэтому сначала допуск 0.3 (~15 м)
+      if (i === 0 && this._vendorDist(vendor) > 0.6) await this.mountUp();     // далеко (~30 м+) — верхом
       const r = await this.moveTo(vendor.x, vendor.y, { tol: 0.3, timeout: 90000 });
       if (r.result === 'бой') {
+        await this.dismount();
         const bad = await fightBack();
         if (bad) return bad;
         continue;
@@ -49,6 +71,7 @@ Object.assign(bot, {
       if (r.result !== 'дошёл' && r.result !== 'таймаут') {
         return { ok: false, result: r, reason: r.result, dist: this._vendorDist(vendor) };
       }
+      await this.dismount();                     // точный подход (короткие шаги) — пешком
       // 2) точно: импульсы W с доворотом (окно торговца открывается только вплотную, ~5 м)
       const n = await this._stepToVendor(vendor, { tol, tries: 12 });
       if (n.ok) return { ok: true, result: n, dist: n.dist };

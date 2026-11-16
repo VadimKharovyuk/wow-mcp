@@ -144,6 +144,11 @@ window.bot = {
     if (this.qaddr == null) return false;
     return this.mem()[this.qaddr + 10 * this.qstride] === 1;
   },
+  // верхом ли игрок (Q[13] = IsMounted); старый Lua без ячейки: false
+  mounted() {
+    if (this.qaddr == null) return false;
+    return this.mem()[this.qaddr + 12 * this.qstride] === 1;
+  },
   // мёртв или призрак (D, иначе Q[12] старого Lua)
   dead() {
     const d = this.deathInfo();

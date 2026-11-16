@@ -430,7 +430,9 @@ Object.assign(bot, {
           const sr = await this.sellAt(cfg.vendor);
           if (sr && sr.result === 'продано') st.sells = (st.sells || 0) + 1;
           else return out('продажа: ' + (sr && sr.result ? sr.result : 'ошибка'));
+          if (Math.hypot(this.state().x - anchor.x, this.state().y - anchor.y) > 0.6) await this.mountUp();   // обратно верхом
           const back = await this.moveTo(anchor.x, anchor.y);
+          await this.dismount();
           if (back.result === 'бой') continue;
           if (back.result === 'застрял') return out('застрял по пути к центру после продажи');
           continue;

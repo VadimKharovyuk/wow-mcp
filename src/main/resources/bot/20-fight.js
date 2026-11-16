@@ -34,7 +34,15 @@ Object.assign(bot, {
                 ] },
       // Паладин: баффы держим всегда. Видеть ауры бот не умеет — жмём по таймеру: на старте гринда, после воскрешения
       // и раз в everyMs (лишнее нажатие просто обновляет бафф). Печать 30 мин, Праведное неистовство 30 мин, Короли 10 мин.
-      paladin: { pullSpells: [1700418603 /* Длань возмездия */, 1953631017 /* «Дань возмездия» — на случай другого написания */],
+      paladin: { // Аварийное лечение по порогу HP (проверяется по порядку, самое срочное первым), выше ротации.
+                 // Возложение рук (8) — HP < 9%, Свет небес (7) — HP < 35%, Вспышка света (U) — HP < 60%.
+                 emergency: [
+                   { spell: 1396923377 /* Возложение рук */, below: 0.09, inFightOnly: true },
+                   { spell: 1488691226 /* Свет небес */,     below: 0.35 },
+                   { spell: 326428551  /* Вспышка света */,  below: 0.60 },
+                 ],
+                 mountKey: 'L' /* Призыв боевого коня */, autoAttack: true, stepBackOnFacing: true,
+                 pullSpells: [1700418603 /* Длань возмездия */, 1953631017 /* «Дань возмездия» — на случай другого написания */],
                  buffs: [
         { key: 'G', name: 'Печать праведности',    everyMs: 25 * 60000 },
         { key: 'T', name: 'Праведное неистовство', everyMs: 25 * 60000 },
@@ -85,6 +93,8 @@ Object.assign(bot, {
   lastHealCastAt() {
     this.lastKey = this.lastKey || {}; this.lastSpellAt = this.lastSpellAt || {};
     let t = this.lastKey['4'] || 0;                               // v1: паладин лечит на 4
+    const cc = this.combatCfg();
+    if (cc && cc.emergency) for (const e of cc.emergency) { const v = this.lastSpellAt[e.spell] || 0; if (v > t) t = v; }
     for (const r of this.activeRotation()) {
       if (!r.maxHpPct && !r.maxPetHpPct) continue;
       const v = r.spell ? (this.lastSpellAt[r.spell] || 0) : (this.lastKey[r.key] || 0);
@@ -137,7 +147,7 @@ Object.assign(bot, {
     const t0 = Date.now(), fightStart = t0;
     let feignAt = 0;
     let lastPress = 0, handledErr = 0, turns = 0, retreats = 0, lastRetreat = 0, deadSince = 0;
-    let noAttackSince = 0, hpAtNoAttack = 0, lastSwitch = 0, trapAt = 0, pullTries = 0, lastPull = 0;
+    let noAttackSince = 0, hpAtNoAttack = 0, lastSwitch = 0, trapAt = 0, pullTries = 0, lastPull = 0, lastAutoAtk = 0, stepBacks = 0;
     const hpHist = [];
     this.fightMobs = 1;
     const cc = this.combatCfg();
@@ -200,12 +210,32 @@ Object.assign(bot, {
       // реакция на свежую ошибку, случившуюся после нашего нажатия
       if (s.errTime > lastPress && s.errTime > handledErr) {
         handledErr = s.errTime;
+        // ближний бой: моб за спиной — пара шагов назад (проходим сквозь него и он снова впереди); не помогло дважды — поворот
+        if (s.err === 1 && cc && cc.stepBackOnFacing && stepBacks < 2) { stepBacks++; await this.retreat(700); continue; }
         if (s.err === 1 && turns < 4) { await this.hold('A', 450); turns++; continue; }  // ~90° поворот
         // стрелку «далеко» в мёртвой зоне не значит «подойди» — он и так вплотную
         const inDeadZone = cc && cc.ranged && this.spellInRange(cc.meleeSpell) === 1;
         if (s.err === 2 && !inDeadZone && now - this.lastHealCastAt() > HEAL_CAST_LOCK_MS) {
           await this.hold('W', 500); continue;                                           // подойти ближе
         }
+      }
+
+      // Аварийное лечение профиля (паладин): первое подходящее по порогу и готовое; один раз и дальше цикл заново
+      if (cc && cc.emergency) {
+        let did = false;
+        for (const e of cc.emergency) {
+          if (hpPct >= e.below || (e.inFightOnly && !s.fight)) continue;
+          if ((this.failedUntil[e.spell] || 0) > now || this.pressLog[e.spell]) continue;
+          const rec = spellRec(e.spell);
+          if (!rec || rec.ready !== 1) continue;
+          if (await this.pressSpell(e.spell)) {
+            this.pressLog[e.spell] = Date.now(); this.pressGT[e.spell] = s.time;
+            this.warnings.push('лечение (' + e.spell + '): HP ' + Math.round(hpPct * 100) + '%');
+            if (this.warnings.length > 20) this.warnings.shift();
+          }
+          did = true; break;
+        }
+        if (did) { await sleep(250); continue; }
       }
 
       // Притвориться мёртвым — последнее средство при HP < 15%: самый приоритетный ход (раньше ловушки и атаки).
@@ -279,6 +309,14 @@ Object.assign(bot, {
           await this.pressSpell(pr.nameHash);
           continue;
         }
+      }
+
+      // Ближний бой: включаем автоатаку командой /startattack (не переключатель — выключить ею нельзя), как только
+      // цель вплотную; повтор не чаще раза в 3 с (цель сменилась / автоатака сбилась). Не прерывает каст.
+      if (cc && cc.autoAttack && s.target && s.enemy && s.targetHp > 0 && (s.tDist & 2) && now - lastAutoAtk > 3000) {
+        lastAutoAtk = now;
+        await chat('/startattack');
+        continue;
       }
 
       let pick = null;
