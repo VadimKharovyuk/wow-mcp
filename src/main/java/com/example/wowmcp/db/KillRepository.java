@@ -34,8 +34,8 @@ public class KillRepository extends BaseRepository {
     }
 
     /**
-     * Тёплые места охоты в зоне: убийства за последние 30 дней сгруппированы по сетке 1×1,
-     * берутся только клетки с >= 2 убийствами, для мобов уровня в [minLvl, maxLvl].
+     * Места охоты в зоне: все убийства (спавны фиксированы, давность не важна), сгруппированные по сетке 0,5×0,5
+     * (~25 м); клетки с >= 1 убийством, для мобов уровня в [minLvl, maxLvl]; самые «людные» первыми, до 150.
      */
     public List<Map<String, Object>> querySpots(int zone, int minLvl, int maxLvl) {
         if (!isEnabled()) return List.of();
@@ -54,12 +54,11 @@ public class KillRepository extends BaseRepository {
                            max(killed_at)             AS last_kill
                     FROM mob_kill
                     WHERE zone = :zone
-                      AND killed_at > now() - interval '30 days'
                       AND (mob_level IS NULL OR mob_level BETWEEN :minLvl AND :maxLvl)
-                    GROUP BY floor(x / 1.0), floor(y / 1.0)
-                    HAVING count(*) >= 2
+                    GROUP BY floor(x / 0.5), floor(y / 0.5)
+                    HAVING count(*) >= 1
                     ORDER BY kills DESC
-                    LIMIT 40""",
+                    LIMIT 150""",
                     params,
                     (rs, rowNum) -> {
                         Map<String, Object> spot = new LinkedHashMap<>();

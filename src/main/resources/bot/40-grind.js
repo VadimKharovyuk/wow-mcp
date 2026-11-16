@@ -230,6 +230,22 @@ Object.assign(bot, {
       this.key('W', false);
       return this.state().fight || this.spellInRange(cc.shootSpell) === 1;
     }
+    // открыватель боя (паладин: Длань возмездия): бежим, пока она не достаёт до цели, и сразу останавливаемся
+    const pr0 = this.pullRec(cc);
+    if (pr0 && pr0.inRange !== -1) {
+      const t1 = Date.now();
+      let best = this.proximity(), lastGain = t1;
+      const inRange = () => { const r = this.pullRec(cc); return !!r && r.inRange === 1; };
+      this.key('W', true);
+      while (this.grinding && Date.now() - t1 < maxMs) {
+        if (this.state().fight || inRange()) break;
+        const pr = this.proximity();
+        if (pr > best) { best = pr; lastGain = Date.now(); } else if (Date.now() - lastGain > 3500) break;
+        await sleep(100);
+      }
+      this.key('W', false);
+      return this.state().fight || inRange();
+    }
     const isReady = k => (this.state().ready >> (+k - 1)) & 1;
     const t0 = Date.now();
     let best = this.proximity(), lastGain = t0;
@@ -283,11 +299,11 @@ Object.assign(bot, {
   },
 
   // patrol: кольцевой маршрут — жадно «ближайшее следующее» от текущей позиции,
-  // только места не дальше maxDistance от anchor (до 40 мест)
+  // только места не дальше maxDistance от anchor (до 150 мест)
   buildPatrolRoute(anchor, cfg) {
     const left = (this.grindSpots || [])
         .filter(p => Math.hypot(p.x - anchor.x, p.y - anchor.y) <= cfg.maxDistance)
-        .slice(0, 40);
+        .slice(0, 150);
     const route = [];
     let cur = { x: anchor.x, y: anchor.y };
     while (left.length) {

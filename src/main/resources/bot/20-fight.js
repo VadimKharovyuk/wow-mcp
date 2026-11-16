@@ -34,7 +34,8 @@ Object.assign(bot, {
                 ] },
       // Паладин: баффы держим всегда. Видеть ауры бот не умеет — жмём по таймеру: на старте гринда, после воскрешения
       // и раз в everyMs (лишнее нажатие просто обновляет бафф). Печать 30 мин, Праведное неистовство 30 мин, Короли 10 мин.
-      paladin: { buffs: [
+      paladin: { pullSpells: [1700418603 /* Длань возмездия */, 1953631017 /* «Дань возмездия» — на случай другого написания */],
+                 buffs: [
         { key: 'G', name: 'Печать праведности',    everyMs: 25 * 60000 },
         { key: 'T', name: 'Праведное неистовство', everyMs: 25 * 60000 },
         { key: 'Y', name: 'Благословение королей', everyMs: 9 * 60000 },
@@ -44,6 +45,13 @@ Object.assign(bot, {
   },
   // ротация для боя: закреплённая в профиле, иначе выученная/заданная (this.rotation)
   activeRotation() { const c = this.combatCfg(); return (c && c.rotation) || this.rotation || []; },
+  // запись заклинания-открывателя боя (cc.pullSpells) на панели умений или null
+  pullRec(cc) {
+    if (!cc || !cc.pullSpells) return null;
+    const sp = this.spells() || [];
+    for (const h of cc.pullSpells) { const r = sp.find(x => x.nameHash === h); if (r) return r; }
+    return null;
+  },
   spellInRange(h) { const r = (this.spells() || []).find(x => x.nameHash === h); return r ? r.inRange : -1; },
 
   // повернуться к направлению a (радианы, как facing) — держим A/D, пока не довернём
@@ -129,7 +137,7 @@ Object.assign(bot, {
     const t0 = Date.now(), fightStart = t0;
     let feignAt = 0;
     let lastPress = 0, handledErr = 0, turns = 0, retreats = 0, lastRetreat = 0, deadSince = 0;
-    let noAttackSince = 0, hpAtNoAttack = 0, lastSwitch = 0, trapAt = 0;
+    let noAttackSince = 0, hpAtNoAttack = 0, lastSwitch = 0, trapAt = 0, pullTries = 0, lastPull = 0;
     const hpHist = [];
     this.fightMobs = 1;
     const cc = this.combatCfg();
@@ -258,6 +266,17 @@ Object.assign(bot, {
           await this.retreat(); retreats++; lastRetreat = Date.now();
           this.warnings.push('отход: моба держит питомец');
           if (this.warnings.length > 20) this.warnings.shift();
+          continue;
+        }
+      }
+
+      // Бой начинаем заклинанием-открывателем (паладин: Длань возмездия): как только достаёт до цели.
+      // До 3 попыток с паузой ≥ 1 с, потом обычная ротация. Нет на панели — правило молча пропускается.
+      if (cc && cc.pullSpells && !s.fight && pullTries < 3 && now - lastPull > 1000) {
+        const pr = this.pullRec(cc);
+        if (pr && pr.ready === 1 && pr.inRange !== 0) {
+          pullTries++; lastPull = now;
+          await this.pressSpell(pr.nameHash);
           continue;
         }
       }
