@@ -43,6 +43,22 @@ Object.assign(bot, {
     if (!this.mounted()) { this.warnings.push('не удалось сесть на коня'); if (this.warnings.length > 20) this.warnings.shift(); }
     return this.mounted();
   },
+  // Задачи для инструментов: сесть на коня / слезть
+  async mount() {
+    const cc = this.combatCfg && this.combatCfg();
+    if (!cc || !cc.mountKey) return { result: 'у этого профиля нет коня', ...this.state() };
+    if (this.qaddr == null) return { result: 'нет данных о состоянии (перезагрузи бота)', ...this.state() };
+    if (this.mounted()) return { result: 'уже верхом', ...this.state() };
+    if (this.state().fight) return { result: 'идёт бой — на коня не сажусь', ...this.state() };
+    const ok = await this.mountUp();
+    return { result: ok ? 'сел на коня' : 'не удалось сесть на коня', ...this.state() };
+  },
+  async dismountNow() {
+    if (!this.mounted()) return { result: 'не верхом', ...this.state() };
+    await this.dismount();
+    return { result: this.mounted() ? 'не удалось слезть' : 'слез с коня', ...this.state() };
+  },
+
   async dismount() {
     if (!this.mounted()) return;
     await chat('/dismount');

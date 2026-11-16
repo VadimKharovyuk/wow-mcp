@@ -20,6 +20,8 @@ class CommandRouterTest {
         assertThat(p("Воскресни").name()).isEqualTo("revive");
         assertThat(p("призови питомца").name()).isEqualTo("pet");
         assertThat(p("/pet").name()).isEqualTo("pet");
+        assertThat(p("сядь на коня").name()).isEqualTo("mount");
+        assertThat(p("слезь").name()).isEqualTo("dismount");
         assertThat(p("иди качайся").name()).isEqualTo("hunt");
         assertThat(p("помощь").name()).isEqualTo("help");
         assertThat(p("перезагрузи бота").name()).isEqualTo("reload");

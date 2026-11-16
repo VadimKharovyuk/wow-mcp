@@ -144,6 +144,19 @@ public class BotActionTools {
         return jsonResult(bridge.start("summonPet", List.of()));
     }
 
+    @Tool(name = "mount", description = """
+            Сесть на боевого коня (клавиша из профиля, у паладина L). Вне боя; уже верхом — ничего не делает. \
+            Работает в фоне — результат через wait_job.""")
+    public String mount() {
+        return jsonResult(bridge.start("mount", List.of()));
+    }
+
+    @Tool(name = "dismount", description = """
+            Слезть с коня (команда /dismount). Не верхом — ничего не делает. Работает в фоне — результат через wait_job.""")
+    public String dismount() {
+        return jsonResult(bridge.start("dismountNow", List.of()));
+    }
+
     @Tool(name = "reload_bot", description = """
             Перезагружает bot.js прямо в открытой странице игры, без её перезагрузки: \
             останавливает старого бота, удаляет window.bot и заново загружает скрипт, \
