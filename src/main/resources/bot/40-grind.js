@@ -16,7 +16,7 @@ Object.assign(bot, {
     maxKills: 10,       // 0 = без лимита
     loot: false,        // собирать добычу после боя; false — просто убивать, без лута
     maxMinutes: 30,
-    respawnSec: 240,    // через сколько секунд место из базы снова считается «тёплым»
+    respawnSec: 300,    // через сколько секунд место из базы снова считается «тёплым» (5 минут)
     minFreeSlots: 2,    // при <= этом значении — идти к торговцу (если задан)
     names: [],          // имена мобов для /target имя (Java берёт из mob_spawn)
     emptyAfterMs: 0,    // >0: столько мс без новой цели — место пустое (используется hunt)
@@ -474,6 +474,16 @@ Object.assign(bot, {
     return oldest;
   },
 
+  // после осмотра места считаем посещёнными и соседние места (Tab берёт ~40 ярдов ≈ 0,7 карты): один и тот же ходящий моб
+  // оставляет убийства в соседних клетках — это один район, а не несколько мест
+  markVisited(spot, radius = 0.6) {
+    const now = Date.now();
+    spot.visitedAt = now;
+    for (const p of this.grindSpots || []) {
+      if (p !== spot && Math.hypot(p.x - spot.x, p.y - spot.y) < radius) p.visitedAt = now;
+    }
+  },
+
   async grind(opts = {}) {
     const cfg = Object.assign(this.grindCfg, opts || {});
     const mode = (opts && opts.mode) === 'patrol' ? 'patrol' : 'radius'; // по умолчанию radius
@@ -636,7 +646,7 @@ Object.assign(bot, {
         st.spotVisits++;
         const m = await this.moveTo(spot.x, spot.y, { tol: 0.4, scan });
         if (m.result === 'бой' || m.result === 'цель') continue;   // напали по дороге / нашли цель на бегу — цикл сам начнёт бой
-        spot.visitedAt = Date.now();
+        this.markVisited(spot);
         const t2 = await this.findTarget({ once: true });    // на месте — быстрый осмотр: один разворот
         if (t2) {
           progress();
@@ -666,7 +676,7 @@ Object.assign(bot, {
           st.spotVisits++;
           const m = await this.moveTo(spot.x, spot.y, { tol: 0.4, scan });
           if (m.result === 'бой' || m.result === 'цель') continue; // напали по дороге / нашли цель на бегу — цикл сам начнёт бой
-          spot.visitedAt = Date.now();
+          this.markVisited(spot);
           const t2 = await this.findTarget({ quick: false }); // на месте — полный осмотр
           if (t2) {
             progress();

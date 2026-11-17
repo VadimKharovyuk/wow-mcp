@@ -23,10 +23,17 @@ Object.assign(bot, {
           tabAt = 0;
           const st = this.state(), cc = this.combatCfg && this.combatCfg();
           // стрелок: цель в дальности выстрела; ближник: подходящая цель ближе ~28 ярдов (дальше approach ненадёжен)
-          if (this.goodPullTarget(st, { needRange: true }) && ((cc && cc.ranged) || (st.tDist & 1))) return done('цель');
+          const good = this.goodPullTarget(st, { needRange: true });
+          if (good && ((cc && cc.ranged) || (st.tDist & 1))) {
+            if (this.grindStats) this.grindStats.runFound = (this.grindStats.runFound || 0) + 1;
+            this.log && this.log('info', 'approach', 'цель найдена на бегу', { onRun: true, tDist: st.tDist, tLvl: st.tLvl });
+            return done('цель');
+          }
+          if (good && this.grindStats) this.grindStats.runFar = (this.grindStats.runFar || 0) + 1;   // подходящая, но дальше ~28 ярдов
         } else if (!tabAt && now - lastTab > 1500) {
           lastTab = tabAt = now;
           await this.tap('TAB');
+          if (this.grindStats) this.grindStats.runTabs = (this.grindStats.runTabs || 0) + 1;
         }
       }
       const dx = tx - s.x, dy = ty - s.y;

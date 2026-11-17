@@ -42,6 +42,9 @@ Object.assign(bot, {
                    { spell: 326428551  /* Вспышка света */,  below: 0.60 },
                  ],
                  // Лечение из выученной ротации — только когда HP ниже порога (иначе жмётся при полном HP вне боя)
+                 // Баффы держит ensureBuffs по таймеру (buffs ниже) — в ротации их нет (иначе жмутся при каждой готовности)
+                 rotationSkip: [1764839983 /* Печать праведности (G) */, 516635130 /* Благословение королей (Y) */,
+                                489876339 /* Праведное неистовство (T) */],
                  healGuard: { 666458133: 0.60 /* Вспышка света (ранги) */, 326428551: 0.60 /* Вспышка света, другое написание */,
                               1488691226: 0.35 /* Свет небес */,
                               1396923377: 0.09 /* Возложение рук — только при HP < 9% (как в аварийном блоке) */ },
@@ -339,6 +342,7 @@ Object.assign(bot, {
         if (r.spell) {
           // открыватель боя (pullSpells) жмётся один раз до боя, в ротации его нет
           if (cc && cc.pullSpells && cc.pullSpells.includes(r.spell)) continue;
+          if (cc && cc.rotationSkip && cc.rotationSkip.includes(r.spell)) continue;
           if (cc && cc.healGuard && cc.healGuard[r.spell] != null && hpPct >= cc.healGuard[r.spell]) continue;
           const rec = spellRec(r.spell);
           if ((this.failedUntil[r.spell] || 0) > now) continue;
