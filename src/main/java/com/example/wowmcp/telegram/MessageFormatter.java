@@ -46,8 +46,15 @@ public final class MessageFormatter {
         }
         JsonNode g = r.path("grind");
         if (g.isObject()) {
-            lines.add("🗡 убито " + g.path("kills").asInt() + " · добыча " + g.path("loots").asInt() + " · отдыхов "
+            lines.add((g.path("minutes").isNumber() ? "⏱ " + g.path("minutes").asText() + " мин" + (g.path("killsPerMin").isNumber() ? " · " + g.path("killsPerMin").asText() + " убийств/мин" : "") + "\n" : "")
+                    + "🗡 убито " + g.path("kills").asInt() + " · добыча " + g.path("loots").asInt() + " · отдыхов "
                     + g.path("rests").asInt() + (g.path("deaths").asInt() > 0 ? " · смертей " + g.path("deaths").asInt() : ""));
+            JsonNode ph = g.path("phasesPct");
+            if (ph.isObject() && ph.size() > 0) {
+                List<String> parts = new ArrayList<>();
+                ph.properties().forEach(e -> parts.add(e.getKey() + " " + e.getValue().asText() + "%"));
+                lines.add("⏳ время: " + String.join(" · ", parts));
+            }
             JsonNode lr = g.path("lootResults");
             if (lr.isObject() && lr.size() > 0) lines.add("📦 " + compact(lr));
             JsonNode rej = g.path("rejects");

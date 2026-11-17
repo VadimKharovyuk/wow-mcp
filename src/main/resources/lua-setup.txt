@@ -19,3 +19,5 @@
 /run local w=W W=function() w() PQ() PR() end
 /run function PC() Q[11]=(UnitCastingInfo("player") or UnitChannelInfo("player")) and 1 or 0 Q[12]=UnitIsDeadOrGhost("player") and 1 or 0 Q[13]=IsMounted() and 1 or 0 end
 /run local w=W W=function() w() PC() end
+/run function PM() Q[14]=(UnitExists("target") and UnitIsUnit("mouseover","target")) and 2 or 1 end
+/run local w=W W=function() w() PM() end

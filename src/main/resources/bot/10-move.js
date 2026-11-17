@@ -2,7 +2,7 @@
 Object.assign(bot, {
   // бег к точке (координаты зоны 0–100); останавливается при бое
   // обход препятствий: прыжок, затем шаг назад + поворот + пробежка в сторону
-  // scan=true (стрелок в гринде): на бегу раз в 1.5 с жмём Tab; подходящая цель в дальности выстрела —
+  // scan=true (гринд): на бегу раз в 1.5 с жмём Tab; подходящая цель в дальности выстрела —
   // останавливаемся и возвращаем 'цель' (бой начнём издалека, а не когда моб добежит вплотную).
   async moveTo(tx, ty, { tol = 0.3, timeout = 90000, scan = false } = {}) {
     const norm = a => Math.atan2(Math.sin(a), Math.cos(a));
@@ -21,7 +21,9 @@ Object.assign(bot, {
         // дальность в spells() обновляется раз в 0.5 с — проверяем цель через 0.7 с после Tab
         if (tabAt && now - tabAt > 700) {
           tabAt = 0;
-          if (this.goodPullTarget(this.state(), { needRange: true })) return done('цель');
+          const st = this.state(), cc = this.combatCfg && this.combatCfg();
+          // стрелок: цель в дальности выстрела; ближник: подходящая цель ближе ~28 ярдов (дальше approach ненадёжен)
+          if (this.goodPullTarget(st, { needRange: true }) && ((cc && cc.ranged) || (st.tDist & 1))) return done('цель');
         } else if (!tabAt && now - lastTab > 1500) {
           lastTab = tabAt = now;
           await this.tap('TAB');

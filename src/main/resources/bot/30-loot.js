@@ -31,12 +31,17 @@ Object.assign(bot, {
     pts.sort((a, b) => Math.hypot(a[0] - 0.5, a[1] - 0.7) - Math.hypot(b[0] - 0.5, b[1] - 0.7));
 
     let scanned = 0, sawDead = false;
+    const lp0 = this.state(), lt0 = Date.now();
+    // первый проход — только труп текущей цели (курсор над целью), чтобы не кликать по чужим обобранным трупам;
+    // второй — как раньше, по любому мёртвому под курсором
+    const sT = this.state(), strictOk = this.steerSupported() && sT.target && sT.targetHp === 0;
     for (let pass = 0; pass < 2; pass++) {       // одна повторная попытка скана
+      const strict = pass === 0 && strictOk;
       for (const [fx, fy] of pts) {
         if (!this.running && this.job.status !== 'running') break;
         this.mouse(fx, fy, 'mousemove');
         await sleep(70); scanned++;
-        if (this.state().moDead) {
+        if (this.state().moDead && (!strict || this.overTarget())) {
           sawDead = true;
           this.mouse(fx, fy, 'mousedown', 2); await sleep(60); this.mouse(fx, fy, 'mouseup', 2);
           const t0 = Date.now();
@@ -68,6 +73,7 @@ Object.assign(bot, {
                                    zone: s.zone, x: s.x, y: s.y, tDist: s.tDist, waitedMs: Date.now() - t0,
                                    moved, retried, at: Date.now() });
               }
+              this.lootInfo = { strict, pass, dx: +(s.x - lp0.x).toFixed(3), dy: +(s.y - lp0.y).toFixed(3), moved, retried, tDist: s.tDist, totalMs: Date.now() - lt0 };
               return { result: gained ? 'добыча собрана' : 'пустой труп или не открылся', point: [fx, fy], ...s };
             }
           }
@@ -83,6 +89,7 @@ Object.assign(bot, {
       }
     }
     const s = this.state();
+    this.lootInfo = { strict: strictOk, scanned, moDeadSeen: sawDead, dx: +(s.x - lp0.x).toFixed(3), dy: +(s.y - lp0.y).toFixed(3), tDist: s.tDist, totalMs: Date.now() - lt0 };
     const info = { scanned, moDeadSeen: sawDead, targetDead: !!s.target && s.targetHp === 0, tDist: s.tDist, lootN: s.lootN };
     console.warn('лут: труп не найден', info);
     this.events.push({ type: 'lootmiss', result: 'труп не найден', source: 'bot', zone: s.zone, x: s.x, y: s.y,

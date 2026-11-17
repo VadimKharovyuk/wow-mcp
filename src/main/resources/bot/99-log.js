@@ -61,9 +61,10 @@ if (!bot.warnings.__logged) {
 
   const _loot = bot.loot;
   bot.loot = async function (o) {
+    this.lootInfo = null;
     const r = await _loot.call(this, o);
     const res = r && r.result ? String(r.result) : '?';
-    this.log(res === 'добыча собрана' ? 'info' : 'warn', 'loot', res);
+    this.log(res === 'добыча собрана' ? 'info' : 'warn', 'loot', res, this.lootInfo || undefined);
     return r;
   };
 
@@ -71,8 +72,9 @@ if (!bot.warnings.__logged) {
   bot.approach = async function (ms) {
     const far = !!this.farName, t0 = Date.now();
     const ok = await _approach.call(this, ms);
-    if (far || !ok) this.log(ok ? 'info' : 'warn', 'approach', (far ? 'далёкая цель: ' : 'цель: ') + (ok ? 'дошёл' : 'не дошёл'),
-        { far, ok: !!ok, durMs: Date.now() - t0 });
+    // далёкие цели пишет сам approach (с причиной); здесь — только обычные неудачи
+    if (!far && !ok) this.log('warn', 'approach', 'цель: не дошёл' + (this.approachWhy ? ' (' + this.approachWhy + ')' : ''),
+        { far: false, ok: false, why: this.approachWhy || null, durMs: Date.now() - t0 });
     return ok;
   };
 
@@ -94,3 +96,39 @@ if (!bot.warnings.__logged) {
     return r;
   };
 })();
+
+// Учёт времени гринда по этапам (бой, лут, отдых, бег, поиск, подход...): «исключительное» время — вложенный этап
+// забирает время у внешнего. Накапливается в grindStats.phases (мс); в статусе — доли в процентах.
+(function () {
+  const PH = { fight: 'бой', loot: 'лут', rest: 'отдых', moveTo: 'бег', findTarget: 'поиск', approach: 'подход',
+               ensureBuffs: 'баффы', ensurePet: 'питомец', sellAt: 'торговец', revive: 'смерть' };
+  let stack = [], last = 0, owner = null;
+  const charge = (st, name, now) => { const p = st.phases = st.phases || {}; p[name] = (p[name] || 0) + (now - last); last = now; };
+  for (const fn of Object.keys(PH)) {
+    const orig = bot[fn];
+    if (typeof orig !== 'function') continue;
+    bot[fn] = async function (...a) {
+      const st = this.grinding && this.grindStats && !this.grindStats.endedAt ? this.grindStats : null;
+      if (!st) return orig.apply(this, a);
+      if (owner !== st) { owner = st; stack = []; last = Date.now(); }
+      const now = Date.now();
+      if (stack.length) charge(st, stack[stack.length - 1], now); else last = now;
+      stack.push(PH[fn]);
+      try { return await orig.apply(this, a); }
+      finally {
+        const t = Date.now();
+        if (owner === st) { charge(st, stack.pop(), t); }
+      }
+    };
+  }
+})();
+
+// Перезагрузка бота обрывает работавшую задачу без записи конца — пишем это в журнал
+try {
+  const prev = window.__prevBot;
+  if (prev && prev !== bot && prev.job && prev.job.status === 'running') {
+    bot.log('warn', 'job', 'прервано перезагрузкой бота: ' + prev.job.name);
+    bot.events.push({ type: 'job', phase: 'end', uid: prev.job.uid, name: prev.job.name, status: 'stopped', result: 'прервано перезагрузкой бота', stats: prev.grindStats || null, at: Date.now() });
+  }
+  window.__prevBot = null;
+} catch (e) { /* не мешаем загрузке */ }

@@ -116,6 +116,18 @@ public class GrindTools {
                 int minLvl = state.pLvl() + (minLvlDiff == null ? DEFAULT_MIN_LVL_DIFF : minLvlDiff);
                 int maxLvl = state.pLvl() + (maxLvlDiff == null ? DEFAULT_MAX_LVL_DIFF : maxLvlDiff);
                 spots = kills.querySpots(state.zone(), minLvl, maxLvl);
+                // режим «радиус»: к местам из убийств добавляем точки появления мобов (в новой зоне истории убийств нет)
+                if (!patrol && zoneId != null) {
+                    double rs = Math.min(radius == null ? 2.5 : radius, 1.0) * 1.1;
+                    List<Map<String, Object>> merged = new java.util.ArrayList<>(spots);
+                    for (Map<String, Object> sp : hunts.spawnSpots(zoneId, minLvl, maxLvl, state.x(), state.y(), rs)) {
+                        double sx = ((Number) sp.get("x")).doubleValue(), sy = ((Number) sp.get("y")).doubleValue();
+                        boolean near = merged.stream().anyMatch(k -> Math.hypot(((Number) k.get("x")).doubleValue() - sx,
+                                ((Number) k.get("y")).doubleValue() - sy) < 0.3);
+                        if (!near) merged.add(sp);
+                    }
+                    spots = merged.size() > 150 ? merged.subList(0, 150) : merged;
+                }
                 if (!spots.isEmpty()) {
                     opts.put("spots", GrindOptions.cleanSpots(spots));
                 }

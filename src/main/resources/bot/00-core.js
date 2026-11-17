@@ -62,6 +62,7 @@ for (let c = 65; c <= 90; c++) { const L = String.fromCharCode(c); if (!KEYS[L])
 KEYS['0'] = KEYS[0];
 
 // ===== базовый объект бота =====
+window.__prevBot = window.bot;
 window.bot = {
   addr: null, stride: 0, saddr: null, sstride: 0, iaddr: null, istride: 0, qaddr: null, qstride: 0, daddr: null, dstride: 0, held: {}, running: false, grinding: false, lastSpellAt: {}, warnings: [],
   lastKey: {}, grindStats: null,
@@ -148,6 +149,13 @@ window.bot = {
   mounted() {
     if (this.qaddr == null) return false;
     return this.mem()[this.qaddr + 12 * this.qstride] === 1;
+  },
+  // Q[14]: 0 — старый Lua (без проверки), 1 — курсор не над целью, 2 — курсор над нашей целью (UnitIsUnit mouseover/target)
+  steerSupported() {
+    return this.qaddr != null && this.mem()[this.qaddr + 13 * this.qstride] >= 1;
+  },
+  overTarget() {
+    return this.qaddr != null && this.mem()[this.qaddr + 13 * this.qstride] === 2;
   },
   // мёртв или призрак (D, иначе Q[12] старого Lua)
   dead() {
@@ -349,17 +357,30 @@ window.bot = {
     this.log && this.log('info', 'job', 'старт: ' + name);
     // Promise.resolve().then: синхронное исключение или не-промис тоже не оставят задачу в 'running'
     Promise.resolve().then(() => this[name](...args))
-        .then(r => { if (this.job.id === id) { this.job = { name, status: 'done', id, uid, ...r }; finished('done', r);
+        .then(r => { if (this.job.id === id) { this.job = { name, status: 'done', id, uid, ...r }; finished('done', r); if (name === 'grind' && this.grindStats) this.grindStats.endedAt = Date.now();
             this.log && this.log('info', 'job', 'конец: ' + name + ' — ' + String((r && r.result) || 'done').slice(0, 150)); } })
-        .catch(e => { if (this.job.id === id) { this.job = { name, status: 'error', id, uid, error: '' + e }; finished('error', { result: '' + e });
+        .catch(e => { if (this.job.id === id) { this.job = { name, status: 'error', id, uid, error: '' + e }; finished('error', { result: '' + e }); if (name === 'grind' && this.grindStats) this.grindStats.endedAt = Date.now();
             this.log && this.log('error', 'error', 'исключение в задаче ' + name + ': ' + e); } })
         .finally(() => { if (this.jobSeq === id) this.jobBusy = false; });
     return 'запущено: ' + name;
+  },
+  // время забега и темп: минуты от старта до конца (или до сейчас) и убийств в минуту
+  grindTiming(st) {
+    const min = st.startedAt ? ((st.endedAt || Date.now()) - st.startedAt) / 60000 : 0;
+    // доли времени по этапам; «прочее» — всё, что вне учтённых этапов (ожидания, переходы между ними)
+    let phasesPct = null;
+    if (st.phases && min > 0) {
+      const total = ((st.endedAt || Date.now()) - st.startedAt), used = Object.values(st.phases).reduce((a, b) => a + b, 0);
+      const all = { ...st.phases, 'прочее': Math.max(0, total - used) };
+      phasesPct = {};
+      Object.entries(all).sort((a, b) => b[1] - a[1]).forEach(([k, v]) => { const p = Math.round(v / total * 100); if (p > 0) phasesPct[k] = p; });
+    }
+    return { ...st, minutes: Math.round(min * 10) / 10, killsPerMin: min >= 0.5 ? Math.round(st.kills / min * 10) / 10 : null, phasesPct };
   },
   report() {
     const s = this.state();
     const di = this.deathInfo();
     const xp = di && di.xpMax > 0 ? Math.min(100, Math.round(di.xp / di.xpMax * 100)) : null;
-    return JSON.stringify({ job: this.job, hpPct: Math.round(s.hp / s.hpMax * 100), ...s, xpPct: xp, xpLeftPct: xp === null ? null : 100 - xp, healLog: (this.healLog || []).slice(-10), grind: this.grindStats || null, route: this.routeProgress || null, hunt: this.huntStats || null, warn: (this.warnings || []).slice(-5) });
+    return JSON.stringify({ job: this.job, hpPct: Math.round(s.hp / s.hpMax * 100), ...s, xpPct: xp, xpLeftPct: xp === null ? null : 100 - xp, healLog: (this.healLog || []).slice(-10), grind: this.grindStats ? this.grindTiming(this.grindStats) : null, route: this.routeProgress || null, hunt: this.huntStats || null, warn: (this.warnings || []).slice(-5) });
   }
 };

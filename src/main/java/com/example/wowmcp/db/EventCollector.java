@@ -47,6 +47,11 @@ public class EventCollector {
     private final java.util.concurrent.atomic.AtomicInteger statCastsInserted = new java.util.concurrent.atomic.AtomicInteger();
     private final java.util.concurrent.atomic.AtomicInteger statKeys = new java.util.concurrent.atomic.AtomicInteger();
     private final java.util.concurrent.atomic.AtomicInteger statDrains = new java.util.concurrent.atomic.AtomicInteger();
+    /** Причины пропуска опроса за минуту: не лидер / страница занята / бот не загружен / пустой ответ. */
+    private final java.util.concurrent.atomic.AtomicInteger skipNotLeader = new java.util.concurrent.atomic.AtomicInteger();
+    private final java.util.concurrent.atomic.AtomicInteger skipBusy = new java.util.concurrent.atomic.AtomicInteger();
+    private final java.util.concurrent.atomic.AtomicInteger skipNotLoaded = new java.util.concurrent.atomic.AtomicInteger();
+    private final java.util.concurrent.atomic.AtomicInteger skipEmpty = new java.util.concurrent.atomic.AtomicInteger();
     private final java.util.concurrent.atomic.AtomicInteger statInsertErrors = new java.util.concurrent.atomic.AtomicInteger();
 
     public EventCollector(GameBridge bridge, Database db, CastHistoryRepository casts, KillRepository kills, SpellIdResolver spellIds, HuntRepository hunts, LeaderLock leader, org.springframework.context.ApplicationEventPublisher publisher, GameEventRepository gameEvents, com.example.wowmcp.roads.RoadService roads, PathRepository paths, ProfileRepository profiles, RotationLearner learner, BotLogRepository botLog) {
@@ -91,13 +96,20 @@ public class EventCollector {
     @Scheduled(fixedDelay = 3000)
     public void collect() {
         if (!leader.isLeader()) {
+            skipNotLeader.incrementAndGet();
             return;                       // события читает только лидер: иначе статистика задвоится
         }
+        if (bridge.isBusy()) {
+            skipBusy.incrementAndGet();
+            return;
+        }
         if (!bridge.isBotLoadedIfConnected()) {
+            skipNotLoaded.incrementAndGet();
             return;
         }
         Optional<String> drained = bridge.evalIfReady("bot.drainEvents()", 2000);
         if (drained.isEmpty()) {
+            skipEmpty.incrementAndGet();
             return;
         }
         String payload = drained.get();
@@ -306,9 +318,10 @@ public class EventCollector {
      */
     @Scheduled(fixedDelay = 60_000, initialDelay = 60_000)
     public void logStats() {
-        log.info("события: cast={}, kill={}, вставлено cast={} (key={}, опросов страницы={}, ошибок вставки={}, БД {})",
+        log.info("события: cast={}, kill={}, вставлено cast={} (key={}, опросов страницы={}, ошибок вставки={}, БД {}; пропуски: не лидер={}, занята={}, бот не загружен={}, пустой ответ={})",
                 statCasts.getAndSet(0), statKills.getAndSet(0), statCastsInserted.getAndSet(0),
                 statKeys.getAndSet(0), statDrains.getAndSet(0), statInsertErrors.getAndSet(0),
-                db.isEnabled() ? "включена" : "выключена");
+                db.isEnabled() ? "включена" : "выключена",
+                skipNotLeader.getAndSet(0), skipBusy.getAndSet(0), skipNotLoaded.getAndSet(0), skipEmpty.getAndSet(0));
     }
 }

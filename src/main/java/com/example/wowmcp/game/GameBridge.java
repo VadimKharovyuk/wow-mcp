@@ -103,6 +103,23 @@ public class GameBridge {
      * Не подключается к Chrome и не запускает Lua-подготовку: возвращает true только если
      * страница уже открыта и bot.js загружен. Безопасно вызывать из фоновых потоков.
      */
+    /** Занята ли страница тяжёлой операцией (для диагностики сборщика событий). */
+    public boolean isBusy() {
+        return connection.isBusy();
+    }
+
+    /** Когда в последний раз писали в лог причину «бот не загружен» (не чаще раза в минуту). */
+    private volatile long lastNotLoadedLogAt;
+
+    private boolean notLoaded(String reason) {
+        long now = System.currentTimeMillis();
+        if (now - lastNotLoadedLogAt > 60_000) {
+            lastNotLoadedLogAt = now;
+            log.info("Бот не загружен в странице: {}", reason);
+        }
+        return false;
+    }
+
     public boolean isBotLoadedIfConnected() {
         // Пока идёт тяжёлая операция, не трогаем страницу: иначе таймаут фонового
         // сборщика событий прервёт выполняющуюся операцию.
@@ -110,18 +127,22 @@ public class GameBridge {
             return false;
         }
         try {
-            return connection.callOnce(2000, () -> {
-                if (connection.page() == null || connection.page().isClosed()) {
-                    return false;
+            Object r = connection.callOnce(2000, () -> {
+                if (connection.page() == null) {
+                    return (Object) "страницы нет (нет подключения к игре)";
+                }
+                if (connection.page().isClosed()) {
+                    return (Object) "страница закрыта";
                 }
                 try {
-                    return Boolean.TRUE.equals(connection.page().evaluate(BOT_LOADED_JS));
+                    return Boolean.TRUE.equals(connection.page().evaluate(BOT_LOADED_JS)) ? (Object) Boolean.TRUE : (Object) "window.bot не определён (страницу перезагрузили?)";
                 } catch (PlaywrightException e) {
-                    return false;
+                    return (Object) ("ошибка проверки: " + String.valueOf(e.getMessage()).split("\\R")[0]);
                 }
             });
+            return Boolean.TRUE.equals(r) || (r != null && notLoaded(String.valueOf(r)));
         } catch (RuntimeException e) {
-            return false;
+            return notLoaded("исключение: " + String.valueOf(e.getMessage()).split("\\R")[0]);
         }
     }
 

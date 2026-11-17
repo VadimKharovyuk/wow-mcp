@@ -41,6 +41,10 @@ Object.assign(bot, {
                    { spell: 1488691226 /* Свет небес */,     below: 0.35 },
                    { spell: 326428551  /* Вспышка света */,  below: 0.60 },
                  ],
+                 // Лечение из выученной ротации — только когда HP ниже порога (иначе жмётся при полном HP вне боя)
+                 healGuard: { 666458133: 0.60 /* Вспышка света (ранги) */, 326428551: 0.60 /* Вспышка света, другое написание */,
+                              1488691226: 0.35 /* Свет небес */,
+                              1396923377: 0.09 /* Возложение рук — только при HP < 9% (как в аварийном блоке) */ },
                  mountKey: 'L' /* Призыв боевого коня */, autoAttack: true, stepBackOnFacing: true,
                  pullSpells: [1700418603 /* Длань возмездия */, 1953631017 /* «Дань возмездия» — на случай другого написания */],
                  buffs: [
@@ -142,7 +146,7 @@ Object.assign(bot, {
     return !!p && p.exists && !p.dead && !p.mend && p.hpPct < below;
   },
 
-  async fight({ fleeAt = 0.2, timeout = 90000 } = {}) {
+  async fight({ fleeAt = 0.2, timeout = 140000 } = {}) {
     this.running = true;
     const t0 = Date.now(), fightStart = t0;
     let feignAt = 0;
@@ -163,9 +167,11 @@ Object.assign(bot, {
 
       // Цель не бьёт ни игрока, ни питомца ≥ 2 с, а HP игрока падает — бьёт кто-то другой: переключиться
       const pp = this.pet();
-      if (pp && s.fight && s.target && s.enemy && s.targetHp > 0 && !pp.ttPlayer && !pp.ttPet) {
+      // Не бросаем моба, которого уже начали бить (доля HP цели < 99%): сначала добиваем. Переключаемся только с нетронутой
+      // цели, которая не бьёт нас > 5 с, и не чаще раза в 10 с — иначе в бою с двумя мобами цель прыгает и никто не умирает.
+      if (pp && s.fight && s.target && s.enemy && s.targetHp > 0 && s.targetHpPct >= 0.99 && !pp.ttPlayer && !pp.ttPet) {
         if (!noAttackSince) { noAttackSince = Date.now(); hpAtNoAttack = hpPct; }
-        else if (Date.now() - noAttackSince >= 2000 && hpPct < hpAtNoAttack - 0.03 && Date.now() - lastSwitch > 3000) {
+        else if (Date.now() - noAttackSince >= 5000 && hpPct < hpAtNoAttack - 0.03 && Date.now() - lastSwitch > 10000) {
           lastSwitch = Date.now(); noAttackSince = 0;
           if (await this.switchToAttacker()) {
             this.fightMobs++;
@@ -331,6 +337,9 @@ Object.assign(bot, {
       for (const r of this.activeRotation()) {
         // --- v2: заклинание по хешу названия ---
         if (r.spell) {
+          // открыватель боя (pullSpells) жмётся один раз до боя, в ротации его нет
+          if (cc && cc.pullSpells && cc.pullSpells.includes(r.spell)) continue;
+          if (cc && cc.healGuard && cc.healGuard[r.spell] != null && hpPct >= cc.healGuard[r.spell]) continue;
           const rec = spellRec(r.spell);
           if ((this.failedUntil[r.spell] || 0) > now) continue;
           // уже нажали и ждём, сработало ли — не жать повторно каждые 250 мс
@@ -345,7 +354,7 @@ Object.assign(bot, {
           if (cc && cc.meleeSpell && r.spell === cc.meleeSpell && rec.inRange !== 1) continue;
           if (r.maxHpPct && hpPct >= r.maxHpPct) continue;
           if (r.maxPetHpPct && !this.petNeedsHeal(r.maxPetHpPct)) continue;
-          if (r.outOfCombatOnly && s.fight) continue;
+          if ((r.outOfCombatOnly || r.spell === 1700418603 || r.key === 'O') && s.fight) continue;
           if (r.waitAfter) {
             const ref = r.waitAfter.spell ? (this.lastSpellAt[r.waitAfter.spell] || 0) : (this.lastKey[r.waitAfter.key] || 0);
             if (now - ref < (r.waitAfter.ms || 0)) continue;   // ещё рано — к следующему правилу
@@ -356,7 +365,7 @@ Object.assign(bot, {
         if (!isReadyKey(r.key)) continue;
         if (r.maxHpPct && hpPct >= r.maxHpPct) continue;
         if (r.maxPetHpPct && !this.petNeedsHeal(r.maxPetHpPct)) continue;
-        if (r.outOfCombatOnly && s.fight) continue;
+        if ((r.outOfCombatOnly || r.spell === 1700418603 || r.key === 'O') && s.fight) continue;
         if (r.waitAfter) {
           const ref = r.waitAfter.spell ? (this.lastSpellAt[r.waitAfter.spell] || 0) : (this.lastKey[r.waitAfter.key] || 0);
           if (now - ref < (r.waitAfter.ms || 0)) continue;   // ещё рано — к следующему правилу

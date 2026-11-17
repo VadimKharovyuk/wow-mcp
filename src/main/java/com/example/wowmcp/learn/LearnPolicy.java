@@ -99,7 +99,8 @@ public class LearnPolicy {
 
     /**
      * Правило задано вручную и не должно затираться обучением: у него есть условие
-     * ({@code maxHpPct}, {@code maxPetHpPct}, {@code repeatMs}) или оно привязано к слоту ({@code key}).
+     * ({@code maxHpPct}, {@code maxPetHpPct}, {@code repeatMs}) или оно привязано к слоту ({@code key}),
+     * либо явно помечено как удар только вне боя ({@code outOfCombatOnly}).
      * Правила, которые создало само обучение, помечены {@code learned: true} и пересчитываются.
      */
     static boolean isManualRule(Map<String, Object> rule) {
@@ -107,6 +108,7 @@ public class LearnPolicy {
         return rule.get("maxHpPct") != null
                 || rule.get("maxPetHpPct") != null
                 || rule.get("repeatMs") != null
-                || rule.get("key") != null;
+                || rule.get("key") != null
+                || rule.get("outOfCombatOnly") != null;
     }
 }

@@ -54,6 +54,35 @@ public class HuntRepository extends BaseRepository {
     }
 
     /**
+     * Точки появления обычных мобов (fac = '', rnk = 0) под уровень вокруг точки — как места охоты для режима «радиус».
+     * Группируются по сетке 0,4×0,4; вес (kills) = число спавнов в клетке, не больше 3. Формат как у KillRepository.querySpots.
+     */
+    public List<Map<String, Object>> spawnSpots(int zoneId, int minLvl, int maxLvl, double x, double y, double radius) {
+        if (!isEnabled()) return List.of();
+        try {
+            return jdbc().query("""
+                    SELECT round(avg(x)::numeric, 2) AS x, round(avg(y)::numeric, 2) AS y,
+                           least(count(*), 3) AS kills, round(avg(lvl_max)) AS lvl
+                    FROM mob_spawn
+                    WHERE zone_id = ? AND fac = '' AND rnk = 0 AND lvl_max BETWEEN ? AND ?
+                      AND sqrt(power(x - CAST(? AS float8), 2) + power(y - CAST(? AS float8), 2)) <= CAST(? AS float8)
+                    GROUP BY floor(x / 0.4), floor(y / 0.4)
+                    ORDER BY count(*) DESC LIMIT 100""",
+                    (rs, i) -> {
+                        Map<String, Object> m = new java.util.LinkedHashMap<>();
+                        m.put("x", rs.getDouble("x"));
+                        m.put("y", rs.getDouble("y"));
+                        m.put("kills", rs.getLong("kills"));
+                        m.put("lvl", rs.getDouble("lvl"));
+                        return m;
+                    }, zoneId, minLvl, maxLvl, x, y, radius);
+        } catch (Exception e) {
+            log.warn("Не удалось прочитать точки появления: {}", e.getMessage());
+            return List.of();
+        }
+    }
+
+    /**
      * Кластеры под уровень игрока, не в «пустых» (empty_until), в пределах maxDistance, лучшие первыми.
      * Оценка: spawns * found_rate / (1 + расстояние/10); found_rate = found/visits (без посещений — 1).
      */
