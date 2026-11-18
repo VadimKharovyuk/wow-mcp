@@ -33,7 +33,7 @@ public class ProfileRepository extends BaseRepository {
                     profile, rotationJson, samples, new Timestamp(System.currentTimeMillis()), statsJson);
         } catch (Exception e) {
             log.warn("Не удалось сохранить профиль ротации: {}", e.getMessage());
-            db.disable();
+            db.failed(e);
         }
     }
 
@@ -95,7 +95,7 @@ public class ProfileRepository extends BaseRepository {
             jdbc().update("DELETE FROM active_profile WHERE profile = ?", profile);
         } catch (Exception e) {
             log.warn("Не удалось удалить данные профиля: {}", e.getMessage());
-            db.disable();
+            db.failed(e);
         }
     }
 

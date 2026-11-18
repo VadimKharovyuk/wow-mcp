@@ -23,13 +23,18 @@ public class KillRepository extends BaseRepository {
     public void insertMobKill(int zone, double x, double y, Integer mobLevel, Integer playerLevel,
                               String source, long atMillis, String jobUid) {
         if (!isEnabled()) return;
+        // мусорные координаты (экран загрузки, телепорт) не пишем: поле real и карта 0..100
+        if (!Double.isFinite(x) || !Double.isFinite(y) || x < 0 || x > 100 || y < 0 || y > 100) {
+            log.warn("Убийство пропущено: координаты вне карты (zone={}, x={}, y={})", zone, x, y);
+            return;
+        }
         try {
             jdbc().update(
                     "INSERT INTO mob_kill (zone,x,y,mob_level,player_level,source,killed_at,job_uid) VALUES (?,?,?,?,?,?,?,?)",
                     zone, x, y, mobLevel, playerLevel, source, new Timestamp(atMillis), jobUid);
         } catch (Exception e) {
             log.warn("Не удалось записать убийство: {}", e.getMessage(), e);
-            db.disable();
+            db.failed(e);
         }
     }
 

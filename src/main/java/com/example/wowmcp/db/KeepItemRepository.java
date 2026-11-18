@@ -26,7 +26,7 @@ public class KeepItemRepository extends BaseRepository {
                 jdbc().update("INSERT INTO keep_item (item_id) VALUES (?)", itemId);
             } catch (Exception e2) {
                 log.warn("Не удалось сохранить keep_item: {}", e2.getMessage());
-                db.disable();
+                db.failed(e2);
             }
         }
     }

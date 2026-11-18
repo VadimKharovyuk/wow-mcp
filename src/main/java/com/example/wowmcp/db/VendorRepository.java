@@ -25,7 +25,7 @@ public class VendorRepository extends BaseRepository {
             jdbc().update("INSERT INTO vendor (zone,x,y,name,facing) VALUES (?,?,?,?,?)", zone, x, y, name, facing);
         } catch (Exception e) {
             log.warn("Не удалось сохранить торговца: {}", e.getMessage());
-            db.disable();
+            db.failed(e);
         }
     }
 

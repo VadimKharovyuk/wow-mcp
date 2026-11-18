@@ -76,6 +76,22 @@ public class Database {
         return namedJdbc;
     }
 
+    /**
+     * Реакция на ошибку записи/чтения: выключаем БД только если пропала связь (нет соединения, SQLState 08xxx).
+     * Ошибка данных (значение не влезло, нарушение ограничения и т.п.) БД не выключает — пропадает только одна запись.
+     */
+    void failed(Throwable e) {
+        for (Throwable t = e; t != null; t = t.getCause()) {
+            if (t instanceof java.sql.SQLTransientConnectionException || t instanceof java.net.ConnectException
+                    || t instanceof org.springframework.jdbc.CannotGetJdbcConnectionException
+                    || (t instanceof java.sql.SQLException se && se.getSQLState() != null && se.getSQLState().startsWith("08"))) {
+                log.warn("БД отключается: потеряна связь ({})", t.getMessage());
+                disable();
+                return;
+            }
+        }
+    }
+
     /** Выключает БД и закрывает пул (после ошибки, похожей на потерю связи). */
     void disable() {
         enabled = false;

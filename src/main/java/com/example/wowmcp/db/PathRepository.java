@@ -25,7 +25,7 @@ public class PathRepository extends BaseRepository {
                     sessionId, zone, x, y, new Timestamp(atMillis), source == null ? "manual" : source);
         } catch (Exception e) {
             log.warn("Не удалось записать точку пути: {}", e.getMessage(), e);
-            db.disable();
+            db.failed(e);
         }
     }
 
