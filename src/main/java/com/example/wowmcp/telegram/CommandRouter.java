@@ -72,6 +72,7 @@ public final class CommandRouter {
             case "бей" -> Command.of("fight");
             case "ошибки" -> Command.of("errors");
             case "логи", "журнал" -> Command.of("logs");
+            case "здоровье", "самопроверка", "проверка" -> Command.of("health");
             case "сумки" -> Command.of("bags");
             case "места", "места куда", "мои места" -> Command.of("places");
             case "маршруты" -> Command.of("routes");
@@ -110,6 +111,7 @@ public final class CommandRouter {
             case "bags" -> Command.of("bags");
             case "errors" -> arg.isBlank() ? Command.of("errors") : Command.of("errors", arg);
             case "logs" -> arg.isBlank() ? Command.of("logs") : Command.of("logs", arg);
+            case "health" -> Command.of("health");
             case "places" -> Command.of("places");
             case "routes" -> Command.of("routes");
             case "roadslist" -> Command.of("roads_list");

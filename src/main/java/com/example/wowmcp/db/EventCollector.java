@@ -47,6 +47,18 @@ public class EventCollector {
     private final java.util.concurrent.atomic.AtomicInteger statCastsInserted = new java.util.concurrent.atomic.AtomicInteger();
     private final java.util.concurrent.atomic.AtomicInteger statKeys = new java.util.concurrent.atomic.AtomicInteger();
     private final java.util.concurrent.atomic.AtomicInteger statDrains = new java.util.concurrent.atomic.AtomicInteger();
+    /** Когда последний раз страница ответила на опрос событий / пришли непустые события (для самопроверки). */
+    private volatile long lastDrainAt;
+    private volatile long lastEventAt;
+
+    public long lastDrainAt() {
+        return lastDrainAt;
+    }
+
+    public long lastEventAt() {
+        return lastEventAt;
+    }
+
     /** Причины пропуска опроса за минуту: не лидер / страница занята / бот не загружен / пустой ответ. */
     private final java.util.concurrent.atomic.AtomicInteger skipNotLeader = new java.util.concurrent.atomic.AtomicInteger();
     private final java.util.concurrent.atomic.AtomicInteger skipBusy = new java.util.concurrent.atomic.AtomicInteger();
@@ -114,6 +126,7 @@ public class EventCollector {
         }
         String payload = drained.get();
         statDrains.incrementAndGet();
+        lastDrainAt = System.currentTimeMillis();
         if (payload == null || payload.isBlank() || payload.equals("[]")) {
             return;
         }
@@ -123,6 +136,9 @@ public class EventCollector {
         } catch (Exception e) {
             log.warn("Не удалось разобрать события: {}", e.getMessage());
             return;
+        }
+        if (!events.isEmpty()) {
+            lastEventAt = System.currentTimeMillis();
         }
         int killN = 0, pathN = 0, keyN = 0, castN = 0;
         String lastProfile = null;

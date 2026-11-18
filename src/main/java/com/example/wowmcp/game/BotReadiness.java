@@ -223,9 +223,21 @@ class BotReadiness {
         throw lastError != null ? lastError : readyTimeout();
     }
 
+    /** Версия JS на диске/в jar (то, что загрузится при «перезагрузи бота»). */
+    String jsVersionOnDisk() {
+        return scriptLoader.version();
+    }
+
+    /** Версия Lua в этом jar (в игре должна совпадать, иначе нужен ./deploy.sh). */
+    int luaVersionJava() {
+        return luaSources.version();
+    }
+
     private void injectBot() {
         log.info("Загружаю модули bot.js в страницу игры ({})", scriptLoader.describeSource());
-        page().evaluate("(src) => { (0, eval)(src); }", scriptLoader.read());
+        String js = scriptLoader.read();
+        page().evaluate("(src) => { (0, eval)(src); }", js);
+        page().evaluate("(v) => { window.__botJsVer = v; }", BotScriptLoader.versionOf(js));
         if (!isBotLoaded()) {
             throw new IllegalStateException("Не удалось загрузить bot.js: window.bot не появился");
         }

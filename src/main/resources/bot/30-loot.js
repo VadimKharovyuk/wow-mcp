@@ -32,11 +32,12 @@ Object.assign(bot, {
 
     let scanned = 0, sawDead = false;
     const lp0 = this.state(), lt0 = Date.now();
-    // первый проход — только труп текущей цели (курсор над целью), чтобы не кликать по чужим обобранным трупам;
-    // второй — как раньше, по любому мёртвому под курсором
+    // кликаем только по трупу текущей цели (курсор над целью): правый клик по чужому обобранному трупу запускает
+    // автоподход к нему, и бот убегает от своего. Оба прохода строгие; без проверки (старый Lua / нет мёртвой цели)
+    // остаётся прежнее поведение — по любому мёртвому под курсором
     const sT = this.state(), strictOk = this.steerSupported() && sT.target && sT.targetHp === 0;
     for (let pass = 0; pass < 2; pass++) {       // одна повторная попытка скана
-      const strict = pass === 0 && strictOk;
+      const strict = strictOk;
       for (const [fx, fy] of pts) {
         if (!this.running && this.job.status !== 'running') break;
         this.mouse(fx, fy, 'mousemove');

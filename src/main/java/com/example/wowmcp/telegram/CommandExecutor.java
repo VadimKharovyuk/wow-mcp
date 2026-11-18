@@ -6,6 +6,7 @@ import com.example.wowmcp.tools.BotActionTools;
 import com.example.wowmcp.tools.GrindTools;
 import com.example.wowmcp.tools.HuntTools;
 import com.example.wowmcp.tools.InventoryTools;
+import com.example.wowmcp.tools.HealthTools;
 import com.example.wowmcp.tools.LogTools;
 import com.example.wowmcp.tools.PlaceTools;
 import com.example.wowmcp.tools.RecordingTools;
@@ -29,7 +30,7 @@ public class CommandExecutor {
             статус · стоп · жди
             качайся [без лута] [по точкам] [N убийств] [M минут] · иди качайся
             продай · воскресни · призови питомца · сядь на коня · слезь · отдохни · лут · бей
-            сумки · ошибки [2 часа] [лут] [паладин] · логи · места · маршруты · покажи дороги · дорога N · умения · ротация
+            сумки · ошибки [2 часа] [лут] [паладин] · логи · здоровье · места · маршруты · покажи дороги · дорога N · умения · ротация
             иди к ИМЯ · иди по маршруту ИМЯ · запомни место ИМЯ · запомни торговца ИМЯ
             иди X Y · беги X Y · построй дороги · перезагрузи бота
             /id — показать ваш chat id""";
@@ -44,10 +45,11 @@ public class CommandExecutor {
     private final RotationTools rotation;
     private final RoadTools roads;
     private final LogTools logTools;
+    private final HealthTools healthTools;
 
     public CommandExecutor(GameBridge bridge, BotActionTools actions, GrindTools grind, HuntTools hunt,
                            InventoryTools inventory, PlaceTools places, RecordingTools recording,
-                           RotationTools rotation, RoadTools roads, LogTools logTools) {
+                           RotationTools rotation, RoadTools roads, LogTools logTools, HealthTools healthTools) {
         this.bridge = bridge;
         this.actions = actions;
         this.grind = grind;
@@ -58,6 +60,7 @@ public class CommandExecutor {
         this.rotation = rotation;
         this.roads = roads;
         this.logTools = logTools;
+        this.healthTools = healthTools;
     }
 
     /** Выполнить команду и вернуть текст ответа. Блокирует поток до ответа игры — вызывать не из потока опроса. */
@@ -80,6 +83,7 @@ public class CommandExecutor {
                 case "rest" -> MessageFormatter.toolResult(actions.rest());
                 case "loot" -> MessageFormatter.toolResult(actions.loot());
                 case "fight" -> MessageFormatter.toolResult(actions.fight());
+                case "health" -> healthTools.render();
                 case "errors" -> logTools.render(true, c.arg());
                 case "logs" -> logTools.render(false, c.arg());
                 case "bags" -> MessageFormatter.toolResult(inventory.bags());

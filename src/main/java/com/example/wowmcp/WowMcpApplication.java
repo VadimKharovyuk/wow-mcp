@@ -30,9 +30,10 @@ public class WowMcpApplication {
     public ToolCallbackProvider wowToolCallbacks(BotActionTools actions, GrindTools grind,
                                                  RecordingTools recording, RotationTools rotation,
                                                  InventoryTools inventory, PlaceTools places, HuntTools hunt, RoadTools roadTools,
-                                                 com.example.wowmcp.tools.LogTools logTools) {
+                                                 com.example.wowmcp.tools.LogTools logTools,
+                                                 com.example.wowmcp.tools.HealthTools healthTools) {
         return MethodToolCallbackProvider.builder()
-                .toolObjects(actions, grind, recording, rotation, inventory, places, hunt, roadTools, logTools)
+                .toolObjects(actions, grind, recording, rotation, inventory, places, hunt, roadTools, logTools, healthTools)
                 .build();
     }
 

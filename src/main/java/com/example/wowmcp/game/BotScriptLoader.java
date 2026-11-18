@@ -48,6 +48,16 @@ class BotScriptLoader {
         return js.toString();
     }
 
+    /** Короткая версия (хеш) собранного JS: сравнивается с версией, загруженной в страницу игры. */
+    static String versionOf(String js) {
+        return Integer.toHexString(js.hashCode() & 0xFFFFFF);
+    }
+
+    /** Версия JS, как он лежит сейчас на диске / в jar. */
+    String version() {
+        return versionOf(read());
+    }
+
     /** Откуда берётся bot.js — для логов и отчёта reload_bot. */
     String describeSource() {
         String dir = properties.botJsDir();

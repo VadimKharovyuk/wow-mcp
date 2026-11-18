@@ -43,7 +43,9 @@ Object.assign(bot, {
                  ],
                  // Лечение из выученной ротации — только когда HP ниже порога (иначе жмётся при полном HP вне боя)
                  // Баффы держит ensureBuffs по таймеру (buffs ниже) — в ротации их нет (иначе жмутся при каждой готовности)
-                 rotationSkip: [1764839983 /* Печать праведности (G) */, 516635130 /* Благословение королей (Y) */,
+                 rotationSkip: [1764839983 /* Печать праведности (G) */, 516635130 /* Благословение королей */,
+                                1791702616 /* Благословение неприкосновенности (Y, id 20911) */,
+                                1191036009 /* Освящение (клавиша 9, id 20116/26573) */,
                                 489876339 /* Праведное неистовство (T) */],
                  healGuard: { 666458133: 0.60 /* Вспышка света (ранги) */, 326428551: 0.60 /* Вспышка света, другое написание */,
                               1488691226: 0.35 /* Свет небес */,
@@ -53,7 +55,7 @@ Object.assign(bot, {
                  buffs: [
         { key: 'G', name: 'Печать праведности',    everyMs: 25 * 60000 },
         { key: 'T', name: 'Праведное неистовство', everyMs: 25 * 60000 },
-        { key: 'Y', name: 'Благословение королей', everyMs: 9 * 60000 },
+        { key: 'Y', name: 'Благословение неприкосновенности', everyMs: 9 * 60000 },
       ] },
     };
     return C[this.profile] || null;
@@ -90,7 +92,11 @@ Object.assign(bot, {
     this.key('S', true);
     try {
       const t0 = Date.now();
-      while (Date.now() - t0 < ms && this.running) await sleep(50);
+      while (Date.now() - t0 < ms && this.running) {
+        await sleep(50);
+        const s = this.state();
+        if (s.target && s.targetHp === 0) break;    // моб уже умер — не дошагивать от трупа (лут вплотную)
+      }
     } finally {
       this.key('S', false);
     }
@@ -121,8 +127,10 @@ Object.assign(bot, {
 
   // нас бьёт моб, который не текущая цель: Tab по кругу, пока цель не будет «целиться в игрока» (Q[8])
   async switchToAttacker() {
+    this.lastSwitchTabs = 0;
     for (let i = 0; i < 4 && this.running; i++) {
       const s = await this.tabTarget();
+      this.lastSwitchTabs = i + 1;
       const p = this.pet();
       if (s.target && s.enemy && s.targetHp > 0 && p && p.ttPlayer) return true;
     }
@@ -154,7 +162,7 @@ Object.assign(bot, {
     const t0 = Date.now(), fightStart = t0;
     let feignAt = 0;
     let lastPress = 0, handledErr = 0, turns = 0, retreats = 0, lastRetreat = 0, deadSince = 0;
-    let noAttackSince = 0, hpAtNoAttack = 0, lastSwitch = 0, trapAt = 0, pullTries = 0, lastPull = 0, lastAutoAtk = 0, stepBacks = 0;
+    let noAttackSince = 0, hpAtNoAttack = 0, lastSwitch = 0, trapAt = 0, pullTries = 0, lastPull = 0, lastAutoAtk = 0, stepBacks = 0, lastAttackerTry = 0;
     const hpHist = [];
     this.fightMobs = 1;
     const cc = this.combatCfg();
@@ -166,7 +174,22 @@ Object.assign(bot, {
       if (hpPct < fleeAt) { this.release(); return { result: 'мало HP — нужен выбор', ...s }; }
       if (Date.now() - t0 > timeout) { this.release(); return { result: 'бой слишком долгий', ...s }; }
 
-      if (!s.target || !s.enemy || s.targetHp === 0) { await this.tabTarget(); continue; }
+      if (!s.target || !s.enemy || s.targetHp === 0) {
+        // цель умерла/пропала, а бой идёт: берём того, кто бьёт нас (Tab до «целится в игрока»), а не случайного врага.
+        // Не чаще раза в 1,5 с — без нападающих иначе каждый круг тратил бы до 4 Tab.
+        if (s.fight && Date.now() - lastAttackerTry > 1500) {
+          lastAttackerTry = Date.now();
+          const was = s.target ? (s.targetHp === 0 ? 'мёртвая' : 'не враг') : 'нет';
+          const ok = await this.switchToAttacker();
+          const n = this.lastSwitchTabs;
+          this.warnings.push('переключился после смерти цели: ' + (ok ? 'на атакующего' : 'атакующего нет, взят ближайший')
+              + ' (Tab ' + n + ', была цель: ' + was + ', HP ' + Math.round(hpPct * 100) + '%)');
+          if (this.warnings.length > 20) this.warnings.shift();
+          if (ok) this.fightMobs++;
+          continue;
+        }
+        await this.tabTarget(); continue;
+      }
 
       // Цель не бьёт ни игрока, ни питомца ≥ 2 с, а HP игрока падает — бьёт кто-то другой: переключиться
       const pp = this.pet();

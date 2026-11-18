@@ -40,6 +40,7 @@ public class TelegramBot {
             new String[]{"hunt", "Выбрать место охоты и качаться"},
             new String[]{"errors", "Ошибки бота (2 часа, лут, паладин)"},
             new String[]{"logs", "Журнал бота (все события)"},
+            new String[]{"health", "Самопроверка: база, версии, сбор событий"},
             new String[]{"bags", "Сумки и деньги"},
             new String[]{"sell", "Продать хлам и починиться"},
             new String[]{"revive", "Воскреснуть"},

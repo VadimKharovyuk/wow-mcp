@@ -69,6 +69,9 @@ public final class MessageFormatter {
         if (route.isObject()) {
             lines.add("🛣 маршрут «" + route.path("name").asText("") + "»: точка " + route.path("i").asInt() + " из " + route.path("n").asInt());
         }
+        if (r.path("jsVer").isTextual()) {
+            lines.add("🔖 версия JS " + r.path("jsVer").asText());
+        }
         JsonNode warn = r.path("warn");
         if (warn.isArray() && warn.size() > 0) {
             lines.add("⚠ " + String.join(" | ", texts(warn)));

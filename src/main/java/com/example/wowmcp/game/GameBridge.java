@@ -39,6 +39,33 @@ public class GameBridge {
         this.readiness = readiness;
     }
 
+    /**
+     * Состояние для самопроверки: занята ли страница, загружен ли бот, версии JS/Lua на диске и в игре.
+     * Не подключается к Chrome и не запускает подготовку. Безопасно вызывать из фоновых потоков.
+     */
+    public Map<String, Object> health() {
+        Map<String, Object> m = new java.util.LinkedHashMap<>();
+        m.put("busy", connection.isBusy());
+        boolean loaded = isBotLoadedIfConnected();
+        m.put("botLoaded", loaded);
+        try {
+            m.put("jsVerDisk", readiness.jsVersionOnDisk());
+            m.put("luaVerJava", readiness.luaVersionJava());
+        } catch (RuntimeException e) {
+            m.put("versionError", String.valueOf(e.getMessage()));
+        }
+        if (loaded) {
+            Optional<String> r = evalIfReady("(() => { try { return (window.__botJsVer || '') + '|' + (window.bot.state().luaVer"
+                    + " === undefined ? '' : window.bot.state().luaVer); } catch (e) { return '|'; } })()", 2000);
+            if (r.isPresent()) {
+                String[] p = r.get().split("\\|", -1);
+                m.put("jsVerPage", p.length > 0 && !p[0].isEmpty() ? p[0] : null);
+                m.put("luaVerPage", p.length > 1 && !p[1].isEmpty() ? p[1] : null);
+            }
+        }
+        return m;
+    }
+
     /** Фоновое подключение сразу после старта сервера (см. {@link BotReadiness#warmUp()}). */
     @EventListener(ApplicationReadyEvent.class)
     public void connectOnStartup() {
