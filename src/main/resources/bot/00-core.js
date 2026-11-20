@@ -101,6 +101,18 @@ window.bot = {
     return res[0];
   },
 
+  // чего не хватает из данных игры: таблицы S/I/Q/D не найдены или не заполняется Lua-цепочка (уровень игрока 0 у живого).
+  // Пустой массив — всё на месте. Нужна ensureReady: версия Lua может совпадать, а подготовка быть применена не целиком.
+  dataMissing() {
+    const miss = [];
+    if (this.saddr == null) miss.push('S');
+    if (this.iaddr == null) miss.push('I');
+    if (this.qaddr == null) miss.push('Q');
+    if (this.daddr == null) miss.push('D');
+    try { const s = this.state(); if (s.hp > 0 && s.pLvl === 0) miss.push('B[18..27]'); } catch (e) { miss.push('state'); }
+    return miss;
+  },
+
   // найти Lua-таблицы B, S, I в памяти WASM
   async find() {
     const b = await this.findTable(777001.5, 777002.5, 8);

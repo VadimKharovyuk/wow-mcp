@@ -35,7 +35,13 @@ public class HealthTools {
     /** Снимок состояния для диагностики. Возраст «-1» — этого ещё не было. */
     public record Snapshot(boolean leader, boolean dbEnabled, boolean botLoaded, boolean busy,
                     String jsDisk, String jsPage, String luaJava, String luaPage,
-                    long drainAgeSec, long eventAgeSec) {
+                    long drainAgeSec, long eventAgeSec, Boolean luaDataOk) {
+        /** Без признака «данные Lua читаются» (неизвестно — не считается проблемой). */
+        public Snapshot(boolean leader, boolean dbEnabled, boolean botLoaded, boolean busy,
+                        String jsDisk, String jsPage, String luaJava, String luaPage,
+                        long drainAgeSec, long eventAgeSec) {
+            this(leader, dbEnabled, botLoaded, busy, jsDisk, jsPage, luaJava, luaPage, drainAgeSec, eventAgeSec, null);
+        }
     }
 
     @Tool(name = "health", description = """
@@ -55,6 +61,7 @@ public class HealthTools {
         sb.append("Бот в игре: ").append(s.botLoaded() ? "загружен" : "не загружен").append(s.busy() ? " (страница занята задачей)" : "").append('\n');
         sb.append("JS: игра ").append(nv(s.jsPage())).append(" · диск ").append(nv(s.jsDisk())).append('\n');
         sb.append("Lua: игра ").append(nv(s.luaPage())).append(" · jar ").append(nv(s.luaJava())).append('\n');
+        if (s.luaDataOk() != null) sb.append("Данные Lua: ").append(s.luaDataOk() ? "читаются" : "НЕ читаются").append('\n');
         if (s.leader()) {
             sb.append("События: последний опрос ").append(ago(s.drainAgeSec())).append(", последнее событие ").append(ago(s.eventAgeSec())).append('\n');
         }
@@ -67,7 +74,8 @@ public class HealthTools {
         long now = System.currentTimeMillis();
         return new Snapshot(leader.isLeader(), db.isEnabled(), Boolean.TRUE.equals(h.get("botLoaded")), Boolean.TRUE.equals(h.get("busy")),
                 str(h.get("jsVerDisk")), str(h.get("jsVerPage")), str(h.get("luaVerJava")), str(h.get("luaVerPage")),
-                age(collector.lastDrainAt(), now), age(collector.lastEventAt(), now));
+                age(collector.lastDrainAt(), now), age(collector.lastEventAt(), now),
+                h.get("luaDataOk") instanceof Boolean ok ? ok : null);
     }
 
     /** Что не так, простыми словами; пусто — всё в порядке. Чистая функция (удобно тестировать). */
@@ -88,6 +96,10 @@ public class HealthTools {
             if (lp != null && lj != null && !lp.equals(lj)) {
                 p.add("⚠ Lua в игре (" + lp + ") не совпадает с jar (" + lj + "): запусти ./deploy.sh и скажи «перезагрузи бота».");
             }
+        }
+        if (s.botLoaded() && Boolean.FALSE.equals(s.luaDataOk())) {
+            p.add("❗ Данные из игры неполные (уровень игрока, зона, мана, дистанция до цели не читаются): бот видит ману 0 и «слепо» отдыхает/не баффает. "
+                    + "Перезагрузи страницу игры (F5), затем скажи «перезагрузи бота».");
         }
         if (s.leader() && s.botLoaded() && !s.busy() && s.drainAgeSec() >= 0 && s.drainAgeSec() > 120) {
             p.add("⚠ Сбор событий не опрашивал страницу " + s.drainAgeSec() + " с: журнал и статистика не пишутся.");

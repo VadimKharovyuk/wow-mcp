@@ -53,4 +53,12 @@ class HealthToolsTest {
         assertTrue(String.join("\n", HealthTools.problems(leader)).contains("Сбор событий"));
         assertEquals(List.of(), HealthTools.problems(other));
     }
+
+    @Test
+    void luaDataNotReadable() {
+        var s = new HealthTools.Snapshot(true, true, true, false, "a", "a", "1", "1", 3, 3, false);
+        assertTrue(HealthTools.problems(s).stream().anyMatch(x -> x.startsWith("❗") && x.contains("Данные из игры неполные")));
+        var ok = new HealthTools.Snapshot(true, true, true, false, "a", "a", "1", "1", 3, 3, true);
+        assertTrue(HealthTools.problems(ok).isEmpty());
+    }
 }

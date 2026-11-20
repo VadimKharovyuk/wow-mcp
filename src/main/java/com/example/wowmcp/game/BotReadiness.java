@@ -160,7 +160,7 @@ class BotReadiness {
         if (!isAddrUnset()) {
             Object v = page().evaluate("() => window.bot.state().luaVer");
             int ver = (v instanceof Number n) ? n.intValue() : -1;
-            if (ver == luaSources.version() && isStateTimeAlive(deadline)) {
+            if (ver == luaSources.version() && isStateTimeAlive(deadline) && !incompleteData()) {
                 log.info("Lua-таблица уже в игре (версия {}) — подготовка пропущена", ver);
                 consecutiveLuaFailures = 0;
                 if (injected) {
@@ -279,6 +279,33 @@ class BotReadiness {
             throw new IllegalStateException(LUA_NOT_FOUND_MESSAGE);
         }
         log.info("Бот готов: {}", page().evaluate("() => JSON.stringify(bot.state())"));
+    }
+
+    /** Не чаще раза в 2 минуты повторяем подготовку из-за неполных данных: иначе при постоянной неполноте каждый вызов тормозил бы. */
+    private static final long INCOMPLETE_REDO_MS = 120_000;
+    private volatile long lastIncompleteRedoAt;
+
+    /**
+     * Версия Lua совпала, но часть таблиц (сумки I, питомец Q, смерть D) не найдена или не заполняется цепочка полей
+     * (уровень игрока 0): подготовка была применена не целиком (например, потерялась строка чата). Тогда её надо выполнить заново.
+     */
+    private boolean incompleteData() {
+        try {
+            Object r = page().evaluate("() => (window.bot && typeof window.bot.dataMissing === 'function') ? window.bot.dataMissing() : []");
+            if (r instanceof java.util.Collection<?> c && !c.isEmpty()) {
+                long now = System.currentTimeMillis();
+                if (now - lastIncompleteRedoAt < INCOMPLETE_REDO_MS) {
+                    log.warn("Данные игры неполные ({}), подготовку уже повторяли недавно — пропускаю", c);
+                    return false;
+                }
+                lastIncompleteRedoAt = now;
+                log.warn("Версия Lua совпала, но данные игры неполные ({}) — выполняю подготовку заново", c);
+                return true;
+            }
+        } catch (RuntimeException e) {
+            log.debug("Проверка полноты данных не удалась: {}", e.getMessage());
+        }
+        return false;
     }
 
     private boolean isAddrUnset() {

@@ -16,6 +16,8 @@ Object.assign(bot, {
     maxKills: 10,       // 0 = без лимита
     loot: false,        // собирать добычу после боя; false — просто убивать, без лута
     maxMinutes: 30,
+    mountTravel: true,  // перебежки между точками верхом (профиль с mountKey), от mountMinDist
+    mountMinDist: 0.6,  // единицы карты (~30 м): ближе пешком
     respawnSec: 300,    // через сколько секунд место из базы снова считается «тёплым» (5 минут)
     minFreeSlots: 2,    // при <= этом значении — идти к торговцу (если задан)
     names: [],          // имена мобов для /target имя (Java берёт из mob_spawn)
@@ -186,6 +188,18 @@ Object.assign(bot, {
     return q && q.exists && q.dead ? 'dead' : 'none';
   },
 
+  // Перебежка к точке верхом: далеко (> mountMinDist, ~30 м) и вне боя — сесть на коня (профиль с mountKey; у остальных
+  // mountUp ничего не делает), добежать, слезть. Слезаем всегда после moveTo — в том числе когда по дороге напали или
+  // нашлась цель: бой и подход начинаются пешком. Выключить: mountTravel: false.
+  async travelTo(x, y, o, cfg) {
+    const s = this.state();
+    if (cfg && cfg.mountTravel !== false && !s.fight && Math.hypot(s.x - x, s.y - y) > ((cfg && cfg.mountMinDist) || 0.6)) {
+      try { await this.mountUp(); } catch (e) { /* не вышло сесть — бежим пешком */ }
+    }
+    try { return await this.moveTo(x, y, o); }
+    finally { if (this.mounted && this.mounted()) await this.dismount(); }
+  },
+
   // Баффы профиля (cc.buffs): вне боя, не во время каста, с маной. Время последнего нажатия — this.buffAt[key];
   // после воскрешения оно сбрасывается (баффы слетают). Ошибка нажатия повторяется не раньше чем через минуту.
   async ensureBuffs(cc) {
@@ -241,7 +255,7 @@ Object.assign(bot, {
     const far = this.farName; this.farName = null;
     const t0 = Date.now();
     let ok;
-    this.approachWhy = null; this.approachSteers = 0; this.approachScans = 0; this.approachFallback = false;
+    this.approachWhy = null; this.approachSteers = 0; this.approachScans = 0; this.approachFallback = false; this.approachSteered = false;
     if (far) {
       // далёкая цель: бежим до 15 с, пока персонаж реально движется и не вышел за радиус охоты от якоря
       const st = this.grindStats, cfg = this.grindCfg || {};
@@ -261,8 +275,21 @@ Object.assign(bot, {
         this.farApproach = { anchor, limit };
         try { ok = await this._approach(Math.max(maxMs, 15000)); } finally { this.farApproach = null; }
       }
+    } else if (this.steerSupported() && !(this.state().tDist & 2) && !this.state().fight) {
+      // обычная цель (Tab, на бегу, на точке): Tab берёт врага и сбоку, а голый бег по прямой уводил от него.
+      // Находим цель на экране, поворачиваемся и подруливаем на бегу — как для далёких; не нашли — бежим прямо, как раньше
+      this.approachSteered = true;
+      try { ok = await this.farRunSteered(null, null, Math.max(maxMs, 8000)); } finally { this.key('W', false); this.key('A', false); this.key('D', false); }
+      if (!ok && this.approachWhy === 'цель не на экране' && this.grinding) {
+        this.approachWhy = null; this.approachFallback = true;
+        ok = await this._approach(maxMs);
+      }
     } else {
       ok = await this._approach(maxMs);
+    }
+    if (!far && this.approachSteered && this.log) {
+      this.log(ok ? 'info' : 'warn', 'approach', 'подход с подруливанием: ' + (ok ? 'дошёл' : (this.approachWhy || 'не дошёл')),
+        { steered: true, ok: !!ok, why: this.approachWhy || null, durMs: Date.now() - t0, steers: this.approachSteers || 0, scans: this.approachScans || 0, fallback: !!this.approachFallback });
     }
     if (far) {
       const why = ok ? 'дошёл' : (this.approachWhy || 'время вышло');
@@ -510,7 +537,7 @@ Object.assign(bot, {
     // шаг в случайную точку внутри радиуса: после неудачного подхода не стоим на месте и не выбираем ту же цель
     const wanderStep = async () => {
       const a = Math.random() * 2 * Math.PI, r = cfg.radius * (0.4 + 0.6 * Math.random());
-      await this.moveTo(anchor.x + r * Math.cos(a), anchor.y + r * Math.sin(a), { scan });
+      await this.travelTo(anchor.x + r * Math.cos(a), anchor.y + r * Math.sin(a), { scan }, cfg);
     };
     const out = r => { st.laps = this.patrolLaps || 0; finish(); return { result: r, stats: st, ...this.state() }; };
     // смерть: гринд завершается со статусом задачи 'dead'; воскрешение — отдельная задача (revive)
@@ -553,8 +580,16 @@ Object.assign(bot, {
 
     let lastProgressAt = Date.now(), lastKills = 0;
     const progress = () => { lastProgressAt = Date.now(); };
+    // Данные Lua-цепочки (уровень игрока, зона, мана, дистанция до цели) не приходят: бот видит ману 0, «слепо» пьёт
+    // и не баффает. Живой персонаж не бывает уровня 0 — это признак. Не стартуем и останавливаемся с понятной причиной.
+    const BROKEN = 'данные из игры неполные (уровень игрока/зона/мана не читаются): перезагрузи страницу игры (F5) и скажи «перезагрузи бота»';
+    const luaBroken = s => s.hp > 0 && s.pLvl === 0;
+    let brokenSince = 0;
+    if (luaBroken(this.state())) { await sleep(1500); if (luaBroken(this.state())) return out(BROKEN); }
     while (this.grinding) {
       const s = this.state();
+      if (luaBroken(s)) { if (!brokenSince) brokenSince = Date.now(); else if (Date.now() - brokenSince > 3000) return out(BROKEN); }
+      else brokenSince = 0;
       if (st.kills !== lastKills) { lastKills = st.kills; progress(); }
       if (cfg.emptyAfterMs && Date.now() - lastProgressAt > cfg.emptyAfterMs) return out('место пустое');
       if (this.dead() || s.hp === 0) {
@@ -625,7 +660,7 @@ Object.assign(bot, {
           continue;
         }
         this.noteReject('вне радиуса');
-        const m = await this.moveTo(anchor.x, anchor.y);
+        const m = await this.travelTo(anchor.x, anchor.y, undefined, cfg);
         if (m.result === 'застрял') return out('застрял по пути к центру');
         continue;
       }
@@ -644,7 +679,7 @@ Object.assign(bot, {
         st.laps = this.patrolLaps || 0;
         if (!spot) { st.wanders++; await sleep(500); continue; }
         st.spotVisits++;
-        const m = await this.moveTo(spot.x, spot.y, { tol: 0.4, scan });
+        const m = await this.travelTo(spot.x, spot.y, { tol: 0.4, scan }, cfg);
         if (m.result === 'бой' || m.result === 'цель') continue;   // напали по дороге / нашли цель на бегу — цикл сам начнёт бой
         this.markVisited(spot);
         const t2 = await this.findTarget({ once: true });    // на месте — быстрый осмотр: один разворот
@@ -674,7 +709,7 @@ Object.assign(bot, {
         const spot = this.nextPointRadius(s, anchor, cfg);
         if (spot) {
           st.spotVisits++;
-          const m = await this.moveTo(spot.x, spot.y, { tol: 0.4, scan });
+          const m = await this.travelTo(spot.x, spot.y, { tol: 0.4, scan }, cfg);
           if (m.result === 'бой' || m.result === 'цель') continue; // напали по дороге / нашли цель на бегу — цикл сам начнёт бой
           this.markVisited(spot);
           const t2 = await this.findTarget({ quick: false }); // на месте — полный осмотр

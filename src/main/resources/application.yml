@@ -30,6 +30,7 @@ wow:
     url: jdbc:postgresql://localhost:5432/wow_bot
     username: vadim
     password: ""
-  # Автообучение ротации можно выключить для профилей (ручной learn_rotation работает всегда):
-  # learn:
-  #   disabled-profiles: hunter
+  # Автообучение ротации выключено: ротация меняется только по команде «переучи ротацию»
+  # (ручной learn_rotation работает всегда).
+  learn:
+    disabled-profiles: paladin,hunter

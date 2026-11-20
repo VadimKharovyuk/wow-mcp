@@ -59,6 +59,31 @@ if (!bot.warnings.__logged) {
     return r;
   };
 
+  // отдых: почему вошли (HP/мана/питомец), мана и HP до и после, какие клавиши нажимались (видно, пил ли), сколько длился
+  const _rest = bot.rest;
+  bot.rest = async function (o) {
+    const s0 = this.state(), t0 = Date.now(), keys = [];
+    const origTap = this.tap;
+    this.tap = async function (k, ...a) { keys.push(String(k)); return origTap.call(this, k, ...a); };
+    let r;
+    try { r = await _rest.call(this, o); }
+    catch (e) { this.log('error', 'rest', 'исключение в отдыхе: ' + e); throw e; }
+    finally { this.tap = origTap; }
+    try {
+      const s1 = this.state(), res = r && r.result ? String(r.result) : '?';
+      const mb = o && o.manaBelow != null ? o.manaBelow : null;
+      const why = [];
+      if (s0.hp / s0.hpMax < 0.7) why.push('HP');
+      if (mb != null && s0.manaPct < mb) why.push('мана');
+      if (!why.length) why.push('питомец/другое');
+      this.log(res === 'отдохнул' ? 'info' : 'warn', 'rest', res, { why: why.join('+'), durMs: Date.now() - t0,
+        hp0: pct(s0.hp, s0.hpMax), hp1: pct(s1.hp, s1.hpMax),
+        mana0: Math.round((s0.manaPct || 0) * 100), mana1: Math.round((s1.manaPct || 0) * 100),
+        manaBelow: mb != null ? Math.round(mb * 100) : null, keys });
+    } catch (e) { /* журнал не мешает */ }
+    return r;
+  };
+
   const _loot = bot.loot;
   bot.loot = async function (o) {
     this.lootInfo = null;
@@ -73,7 +98,7 @@ if (!bot.warnings.__logged) {
     const far = !!this.farName, t0 = Date.now();
     const ok = await _approach.call(this, ms);
     // далёкие цели пишет сам approach (с причиной); здесь — только обычные неудачи
-    if (!far && !ok) this.log('warn', 'approach', 'цель: не дошёл' + (this.approachWhy ? ' (' + this.approachWhy + ')' : ''),
+    if (!far && !ok && !this.approachSteered) this.log('warn', 'approach', 'цель: не дошёл' + (this.approachWhy ? ' (' + this.approachWhy + ')' : ''),
         { far: false, ok: false, why: this.approachWhy || null, durMs: Date.now() - t0 });
     return ok;
   };

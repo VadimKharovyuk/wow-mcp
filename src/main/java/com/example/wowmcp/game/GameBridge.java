@@ -55,12 +55,14 @@ public class GameBridge {
             m.put("versionError", String.valueOf(e.getMessage()));
         }
         if (loaded) {
-            Optional<String> r = evalIfReady("(() => { try { return (window.__botJsVer || '') + '|' + (window.bot.state().luaVer"
-                    + " === undefined ? '' : window.bot.state().luaVer); } catch (e) { return '|'; } })()", 2000);
+            // третья часть: «1» — поля Lua-цепочки (уровень игрока, зона, мана…) заполняются, «0» — нет (живой персонаж, уровень 0)
+            Optional<String> r = evalIfReady("(() => { try { const s = window.bot.state(); return (window.__botJsVer || '') + '|' + (s.luaVer"
+                    + " === undefined ? '' : s.luaVer) + '|' + ((s.hp > 0 && s.pLvl === 0) ? '0' : '1'); } catch (e) { return '||'; } })()", 2000);
             if (r.isPresent()) {
                 String[] p = r.get().split("\\|", -1);
                 m.put("jsVerPage", p.length > 0 && !p[0].isEmpty() ? p[0] : null);
                 m.put("luaVerPage", p.length > 1 && !p[1].isEmpty() ? p[1] : null);
+                if (p.length > 2 && !p[2].isEmpty()) m.put("luaDataOk", "1".equals(p[2]));
             }
         }
         return m;
