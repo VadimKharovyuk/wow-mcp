@@ -255,7 +255,7 @@ Object.assign(bot, {
     const far = this.farName; this.farName = null;
     const t0 = Date.now();
     let ok;
-    this.approachWhy = null; this.approachSteers = 0; this.approachScans = 0; this.approachFallback = false; this.approachSteered = false;
+    this.approachWhy = null; this.approachSteers = 0; this.approachScans = 0; this.approachFallback = false; this.approachSteered = false; this.approachAim = null;
     if (far) {
       // далёкая цель: бежим до 15 с, пока персонаж реально движется и не вышел за радиус охоты от якоря
       const st = this.grindStats, cfg = this.grindCfg || {};
@@ -289,11 +289,11 @@ Object.assign(bot, {
     }
     if (!far && this.approachSteered && this.log) {
       this.log(ok ? 'info' : 'warn', 'approach', 'подход с подруливанием: ' + (ok ? 'дошёл' : (this.approachWhy || 'не дошёл')),
-        { steered: true, ok: !!ok, why: this.approachWhy || null, durMs: Date.now() - t0, steers: this.approachSteers || 0, scans: this.approachScans || 0, fallback: !!this.approachFallback });
+        { steered: true, ok: !!ok, why: this.approachWhy || null, durMs: Date.now() - t0, steers: this.approachSteers || 0, scans: this.approachScans || 0, fallback: !!this.approachFallback, aim: this.approachAim || null });
     }
     if (far) {
       const why = ok ? 'дошёл' : (this.approachWhy || 'время вышло');
-      if (this.log) this.log(ok ? 'info' : 'warn', 'approach', 'далёкая цель: ' + why, { far: true, ok: !!ok, why, durMs: Date.now() - t0, steers: this.approachSteers || 0, scans: this.approachScans || 0, fallback: !!this.approachFallback });
+      if (this.log) this.log(ok ? 'info' : 'warn', 'approach', 'далёкая цель: ' + why, { far: true, ok: !!ok, why, durMs: Date.now() - t0, steers: this.approachSteers || 0, scans: this.approachScans || 0, fallback: !!this.approachFallback, aim: this.approachAim || null });
     }
     if (far && !ok) {
       this.nameCool = this.nameCool || {};
@@ -323,9 +323,14 @@ Object.assign(bot, {
   },
 
   // повернуться так, чтобы цель, стоящая на экране в доле fx, оказалась по центру (≈ 1.6 рад на весь экран; потом подправим)
+  // Возвращает {expected, actual} — на сколько рад хотели и на сколько реально повернулись (для калибровки коэффициента 1.6).
   async aimBy(fx, abort = null) {
     const d = -(fx - 0.5) * 1.6;                                        // справа от центра — вправо (facing уменьшается)
-    if (Math.abs(d) > 0.1) await this.turnTo(this.state().facing + d, 1500, abort);
+    if (Math.abs(d) <= 0.1) return null;
+    const norm = v => Math.atan2(Math.sin(v), Math.cos(v));
+    const f0 = this.state().facing;
+    await this.turnTo(f0 + d, 1500, abort);
+    return { expected: +d.toFixed(2), actual: +norm(this.state().facing - f0).toFixed(2) };
   },
 
   // Бежим к далёкой цели: 1) ищем её на экране (до 4 поворотов по ~90°), 2) бежим кусками по 1.2 с и после каждого
@@ -341,7 +346,17 @@ Object.assign(bot, {
     }
     if (!f) { this.approachWhy = 'цель не на экране'; return false; }
     this.approachScans = this.approachScans || 1;
-    await this.aimBy(f.fx, abort);
+    const aim0 = await this.aimBy(f.fx, abort);
+    // уточнение: грубый поворот по экрану неточен (1.6 рад на экран — примерно). Узкий скан по центру: если цель не по центру,
+    // подправляем ещё раз (до 2), потом бежим. Не нашли в узкой полосе — дальше подруливание широким сканом в цикле
+    this.approachAim = { fx0: +f.fx.toFixed(2), fx1: +f.fx.toFixed(2), refines: 0, expected: aim0 ? aim0.expected : 0, actual: aim0 ? aim0.actual : 0 };
+    for (let r = 0; r < 2 && this.grinding; r++) {
+      const g = await this.scanOnScreen({ narrow: true, abort });
+      if (!g) break;
+      this.approachAim.fx1 = +g.fx.toFixed(2);
+      if (Math.abs(g.fx - 0.5) <= 0.06) break;                          // по центру
+      await this.aimBy(g.fx, abort); this.approachAim.refines++;
+    }
     let s0 = this.state(), pos = { x: s0.x, y: s0.y }, stuck = 0;
     while (this.grinding && Date.now() - t0 < maxMs) {
       if (await this._approach(1200)) return true;

@@ -10,7 +10,7 @@ import java.util.Map;
 
 /**
  * Журнал бота: ошибки и важные события боя по профилям (paladin / hunter ...), хранится 10 дней.
- * Пишет EventCollector (события типа {@code log} из JS-бота), читают Telegram-команда «ошибки» и MCP-инструмент logs.
+ * Пишет EventCollector (события типа {@code log} из JS-бота), читает MCP-инструмент logs.
  */
 @Component
 public class BotLogRepository extends BaseRepository {

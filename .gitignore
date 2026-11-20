@@ -35,8 +35,6 @@ build/
 ### wow-mcp ###
 logs/
 
-### Секреты (токен Telegram-бота, chat id) — не коммитить ###
-telegram.local.properties
 .wow-mcp/
 *.local.properties
 .env

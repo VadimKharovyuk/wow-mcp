@@ -32,7 +32,6 @@ public class EventCollector {
     private final SpellIdResolver spellIds;
     private final HuntRepository hunts;
     private final LeaderLock leader;
-    private final org.springframework.context.ApplicationEventPublisher publisher;
     private final GameEventRepository gameEvents;
     private final com.example.wowmcp.roads.RoadService roads;
     private final PathRepository paths;
@@ -66,7 +65,7 @@ public class EventCollector {
     private final java.util.concurrent.atomic.AtomicInteger skipEmpty = new java.util.concurrent.atomic.AtomicInteger();
     private final java.util.concurrent.atomic.AtomicInteger statInsertErrors = new java.util.concurrent.atomic.AtomicInteger();
 
-    public EventCollector(GameBridge bridge, Database db, CastHistoryRepository casts, KillRepository kills, SpellIdResolver spellIds, HuntRepository hunts, LeaderLock leader, org.springframework.context.ApplicationEventPublisher publisher, GameEventRepository gameEvents, com.example.wowmcp.roads.RoadService roads, PathRepository paths, ProfileRepository profiles, RotationLearner learner, BotLogRepository botLog) {
+    public EventCollector(GameBridge bridge, Database db, CastHistoryRepository casts, KillRepository kills, SpellIdResolver spellIds, HuntRepository hunts, LeaderLock leader, GameEventRepository gameEvents, com.example.wowmcp.roads.RoadService roads, PathRepository paths, ProfileRepository profiles, RotationLearner learner, BotLogRepository botLog) {
         this.bridge = bridge;
         this.db = db;
         this.casts = casts;
@@ -74,7 +73,6 @@ public class EventCollector {
         this.spellIds = spellIds;
         this.hunts = hunts;
         this.leader = leader;
-        this.publisher = publisher;
         this.gameEvents = gameEvents;
         this.roads = roads;
         this.paths = paths;
@@ -84,7 +82,6 @@ public class EventCollector {
     }
 
     /** События, о которых стоит уведомить игрока (смерть, конец задачи, продажа). */
-    private static final java.util.Set<String> NOTIFY_TYPES = java.util.Set.of("death", "job", "sell");
 
     /** События статистики (добыча, смерти, продажи, снимки опыта/денег): остальные поля уходят в data (jsonb). */
     private static final java.util.Set<String> STAT_TYPES = java.util.Set.of("loot", "lootmiss", "death", "sell", "stat");
@@ -144,13 +141,6 @@ public class EventCollector {
         String lastProfile = null;
         for (Map<String, Object> ev : events) {
             String type = String.valueOf(ev.get("type"));
-            if (NOTIFY_TYPES.contains(type)) {
-                try {
-                    publisher.publishEvent(new GameNotification(type, ev));   // Telegram и др.
-                } catch (RuntimeException e) {
-                    log.warn("Уведомление не отправлено: {}", e.getMessage());   // не мешает записи в БД
-                }
-            }
             if ("key".equals(type)) {
                 // key_press больше не наполняем: нажатия дублируют spell_cast и путают обучение
                 keyN++;

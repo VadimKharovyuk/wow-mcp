@@ -51,7 +51,7 @@ public class HealthTools {
         return jsonResult(render());
     }
 
-    /** Текст самопроверки; вызывается и из Telegram-команды «здоровье». */
+    /** Текст самопроверки (инструмент health). */
     public String render() {
         Snapshot s = snapshot();
         List<String> problems = problems(s);

@@ -1,5 +1,0 @@
-# Скопируйте в telegram.local.properties (он в .gitignore) или в ~/.wow-mcp/telegram.properties.
-# 1) Создайте бота у @BotFather командой /newbot и вставьте токен.
-# 2) Запустите контроллер, напишите боту /id — он ответит вашим chat id. Впишите его ниже и перезапустите.
-wow.telegram.token=
-wow.telegram.allowed-chat-ids=123456789

@@ -81,7 +81,7 @@ public class LogTools {
         return jsonResult(render(errorsOnly == null || errorsOnly, query));
     }
 
-    /** Текст ответа: сводка по категориям и последние записи. Вызывается и из Telegram-команд «ошибки» / «логи». */
+    /** Текст ответа: сводка по категориям и последние записи. Используется инструментом logs. */
     public String render(boolean errorsOnly, String arg) {
         if (!logs.isEnabled()) return "База данных выключена — журнала нет.";
         Query q = parse(arg);

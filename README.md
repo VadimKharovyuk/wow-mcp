@@ -10,7 +10,7 @@ Lua-подготовку из `lua-setup.txt`. Дальше LLM-клиент (Op
 
 ## Запуск
 
-Как запускать всё (игра, OpenCode, Telegram, дашборд) — в [docs/ЗАПУСК.md](docs/ЗАПУСК.md).
+Как запускать всё (игра, OpenCode, дашборд) — в [docs/ЗАПУСК.md](docs/ЗАПУСК.md).
 
 ## Статус работ
 
@@ -300,27 +300,6 @@ java -jar dashboard/target/wow-dashboard.jar      # http://localhost:8085
 БД задаётся переменными `WOW_DB_URL`, `WOW_DB_USER`, `WOW_DB_PASSWORD` (по умолчанию `wow_bot`, пользователь `vadim`).
 Данные вашей игры без бота пишутся, только пока запущен сервер wow-mcp: события из страницы вычитывает он.
 
-## Telegram-бот (управление и уведомления)
-
-Пакет `telegram/` в этом же jar. Принимает команды (те же фразы, что в OpenCode: «статус», «качайся», «стоп», «воскресни»,
-«иди к гарпиям» …) и кнопки внизу чата, выполняет их теми же инструментами **без модели и без токенов**, а сам пишет вам
-о событиях: смерть, конец гринда/охоты/маршрута, продажа, мёртвый питомец, закончившиеся боеприпасы.
-
-**Настройка (один раз):**
-1. В Telegram откройте `@BotFather` → `/newbot` → получите токен.
-2. Скопируйте `telegram.local.properties.example` в `telegram.local.properties` (рядом с jar; файл в `.gitignore`) или в
-   `~/.wow-mcp/telegram.properties` и впишите токен. Либо задайте `WOW_TELEGRAM_TOKEN` в окружении.
-3. Запустите контроллер (`./controller.sh`), напишите боту `/id` — он ответит вашим chat id. Впишите его в
-   `wow.telegram.allowed-chat-ids`, перезапустите. Чужим chat id бот не отвечает (кроме `/id`).
-
-**Как запускается.**
-- `./controller.sh` — тот же jar без MCP-сервера: бот и сборщик событий работают, пока открыт этот терминал (Ctrl+C — стоп).
-  OpenCode при этом можно не запускать.
-- Обычный MCP-процесс из OpenCode тоже поднимает бота, если токен задан. Двух ботов не будет: «лидером» (читает события игры и
-  опрашивает Telegram) становится тот процесс, который первым взял блокировку в БД (`LeaderLock`); остальные ждут и
-  подхватывают, если лидер остановился. Без БД процесс всегда лидер.
-- Накопившиеся за время простоя команды при старте отбрасываются (старый «качайся» не выполнится).
-
 ## Структура
 
 ```
@@ -338,7 +317,6 @@ src/main/java/com/example/wowmcp/
   db/Database.java                // пул PostgreSQL, флаг «БД доступна», схема (SchemaInitializer)
   db/*Repository.java             // Kill, Path, CastHistory, Profile, Vendor, KeepItem
   db/EventCollector.java          // сбор событий бота раз в 3 с (только лидер, см. LeaderLock)
-  telegram/                       // Telegram-бот: TelegramBot (опрос), CommandRouter/Executor, Notifier, TelegramApi
   tools/BotActionTools.java       // get_state, go_to, move_to, fight, loot, rest, wait_job, stop, reload_bot
   tools/GrindTools.java           // grind, spots
   tools/RecordingTools.java       // record_start, record_stop

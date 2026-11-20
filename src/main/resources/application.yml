@@ -1,10 +1,6 @@
 spring:
   application:
     name: wow-mcp
-  config:
-    # Секреты Telegram лежат вне git: ./telegram.local.properties (рядом, откуда запущен jar) или
-    # ~/.wow-mcp/telegram.properties; можно и переменными WOW_TELEGRAM_TOKEN / WOW_TELEGRAM_ALLOWED_CHAT_IDS.
-    import: optional:file:./telegram.local.properties,optional:file:${user.home}/.wow-mcp/telegram.properties
   main:
     # Это stdio MCP-сервер: никакого веб-сервера и баннера в stdout.
     web-application-type: none

@@ -5,7 +5,6 @@ import com.example.wowmcp.db.KeepItemRepository;
 import com.example.wowmcp.db.VendorRepository;
 import com.example.wowmcp.game.GameBridge;
 import com.example.wowmcp.game.GameState;
-import com.example.wowmcp.telegram.MessageFormatter;
 import org.springframework.ai.tool.annotation.Tool;
 import org.springframework.ai.tool.annotation.ToolParam;
 import org.springframework.stereotype.Component;
@@ -48,9 +47,9 @@ public class InventoryTools {
                 m.forEach((k, v) -> {
                     out.put(String.valueOf(k), v);
                     if ("money".equals(k) && v instanceof Number n)
-                        out.put("moneyText", MessageFormatter.coins(n.longValue()));
+                        out.put("moneyText", coins(n.longValue()));
                     if ("repairCost".equals(k) && v instanceof Number n)
-                        out.put("repairCostText", MessageFormatter.coins(n.longValue()));
+                        out.put("repairCostText", coins(n.longValue()));
                 });
                 parsed = out;
             }
@@ -129,5 +128,15 @@ public class InventoryTools {
                     "dbEnabled", db.isEnabled()));
         }
         return JSON.writeValueAsString(Map.of("result", "предмет добавлен в KEEP", "itemId", itemId, "dbEnabled", db.isEnabled()));
+    }
+
+    /** Медь → «12з 3с 50м»; нулевые части пропускаются, 0 → «0м». */
+    static String coins(long copper) {
+        long g = copper / 10000, s = copper / 100 % 100, c = copper % 100;
+        StringBuilder sb = new StringBuilder();
+        if (g != 0) sb.append(g).append("з ");
+        if (s != 0) sb.append(s).append("с ");
+        if (c != 0 || sb.length() == 0) sb.append(c).append("м");
+        return sb.toString().trim();
     }
 }
