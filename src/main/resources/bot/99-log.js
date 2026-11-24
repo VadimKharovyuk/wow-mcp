@@ -54,7 +54,7 @@ if (!bot.warnings.__logged) {
       const s1 = this.state(), res = r && r.result ? String(r.result) : '?';
       const bad = res !== 'бой окончен' && res !== 'притворился мёртвым';
       this.log(bad ? 'warn' : 'info', 'fight', res, { durMs: Date.now() - t0, hp0: pct(s0.hp, s0.hpMax), hp1: pct(s1.hp, s1.hpMax),
-        mana0: Math.round((s0.manaPct || 0) * 100), mana1: Math.round((s1.manaPct || 0) * 100), tLvl: s0.tLvl, mobs: this.fightMobs });
+        mana0: Math.round((s0.manaPct || 0) * 100), mana1: Math.round((s1.manaPct || 0) * 100), tLvl: s0.tLvl, mobs: this.fightMobs, opener: this.fightOpener || null, attackers: this.fightMaxAttackers || null });
     } catch (e) { /* журнал не мешает */ }
     return r;
   };
@@ -157,3 +157,21 @@ try {
   }
   window.__prevBot = null;
 } catch (e) { /* не мешаем загрузке */ }
+
+// Ошибки Lua-модулей combat/plates: счётчики растут в таблицах игры — рост пишем в журнал (категория lua, уровень error)
+(function () {
+  const _drain = bot.drainEvents;
+  let seen = { combat: 0, plates: 0 };
+  bot.drainEvents = function () {
+    try {
+      const e = this.luaErrors();
+      for (const k of ['combat', 'plates']) {
+        if (e[k] != null && e[k] > seen[k]) {
+          this.log('error', 'lua', 'ошибка Lua в модуле ' + k + ': всего ' + e[k] + ' (+' + (e[k] - seen[k]) + ')', { module: k, total: e[k] });
+          seen[k] = e[k];
+        }
+      }
+    } catch (err) { /* журнал не мешает */ }
+    return _drain.call(this);
+  };
+})();

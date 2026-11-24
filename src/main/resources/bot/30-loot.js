@@ -29,6 +29,8 @@ Object.assign(bot, {
     for (let fy = 0.45; fy <= 0.90; fy += 0.05)
       for (let fx = 0.25; fx <= 0.75; fx += 0.04) pts.push([fx, fy]);
     pts.sort((a, b) => Math.hypot(a[0] - 0.5, a[1] - 0.7) - Math.hypot(b[0] - 0.5, b[1] - 0.7));
+    // труп вплотную обычно виден в одном и том же месте экрана — сначала проверяем точку прошлой удачи (экономит секунды скана)
+    if (this.lootHint) pts.unshift([this.lootHint.fx, this.lootHint.fy]);
 
     let scanned = 0, sawDead = false;
     const lp0 = this.state(), lt0 = Date.now();
@@ -62,7 +64,10 @@ Object.assign(bot, {
               const lo1 = (this.deathInfo() || {}).lootOpened;
               const opened = lo0 != null && lo1 != null && lo1 > lo0;   // окно добычи открывалось (даже мгновенный автолут)
               const gained = opened || sawWindow || b1.free < b0.free || (b1.money || 0) > (b0.money || 0);
-              if (!gained && !retried && (this.running || this.job.status === 'running')) {     // один повторный клик: первый мог не дойти
+              // один повторный клик (первый мог не дойти) — только если персонаж двигался или труп не вплотную. Стоим на месте,
+              // труп вплотную (tDist & 2), окна нет — это труп без добычи: повтор лишь тратит ~2 с (по журналу спасал 1 из ~60)
+              const adjacentIdle = !moved && (s.tDist & 2);
+              if (!gained && !retried && !adjacentIdle && (this.running || this.job.status === 'running')) {
                 retried = true;
                 this.mouse(fx, fy, 'mousemove'); await sleep(70);
                 this.mouse(fx, fy, 'mousedown', 2); await sleep(60); this.mouse(fx, fy, 'mouseup', 2);
@@ -74,6 +79,7 @@ Object.assign(bot, {
                                    zone: s.zone, x: s.x, y: s.y, tDist: s.tDist, waitedMs: Date.now() - t0,
                                    moved, retried, at: Date.now() });
               }
+              if (gained) this.lootHint = { fx, fy };
               this.lootInfo = { strict, pass, dx: +(s.x - lp0.x).toFixed(3), dy: +(s.y - lp0.y).toFixed(3), moved, retried, tDist: s.tDist, totalMs: Date.now() - lt0 };
               return { result: gained ? 'добыча собрана' : 'пустой труп или не открылся', point: [fx, fy], ...s };
             }

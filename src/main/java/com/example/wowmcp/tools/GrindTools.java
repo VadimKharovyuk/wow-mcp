@@ -86,6 +86,10 @@ public class GrindTools {
             @ToolParam(required = false, description = "После смерти воскреснуть у трупа и продолжить, true/false (по умолчанию true); "
                     + "3 смерти за 10 минут останавливают гринд")
             Boolean autoRevive) {
+        String bridgeProblem = bridge.preflight();      // мост игра↔бот исправен? иначе не стартуем вслепую
+        if (bridgeProblem != null) {
+            return JSON.writeValueAsString(Map.of("result", "охота не запущена: " + bridgeProblem));
+        }
         Map<String, Object> opts = GrindOptions.validated(radius, maxKills, maxMinutes, minLvlDiff, maxLvlDiff,
                 manaBelow, healKey, drinkKey, loot, respawnSec, minFreeSlots, mode, maxDistance, autoRevive);
         boolean patrol = "patrol".equals(opts.get("mode"));

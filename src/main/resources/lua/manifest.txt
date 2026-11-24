@@ -2,3 +2,5 @@
 spells.lua
 bags.lua
 death.lua
+combat.lua
+plates.lua

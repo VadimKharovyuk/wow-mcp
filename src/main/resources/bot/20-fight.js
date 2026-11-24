@@ -43,7 +43,13 @@ Object.assign(bot, {
                  ],
                  // Лечение из выученной ротации — только когда HP ниже порога (иначе жмётся при полном HP вне боя)
                  // Баффы держит ensureBuffs по таймеру (buffs ниже) — в ротации их нет (иначе жмутся при каждой готовности)
+                 // приоритет боевых умений (после экстренных с условием по HP): 1 Молот праведника, 2 Правосудие света, 3 Щит мстителя
+                 priority: [1363607377 /* Молот праведника */, 2037478445 /* Правосудие света */,
+                            { spell: 2008405423 /* Щит мстителя (3) */, minAttackers: 3 /* только когда бьют больше двух врагов */ }],
                  rotationSkip: [1764839983 /* Печать праведности (G) */, 516635130 /* Благословение королей */,
+                                2105405526 /* Очищение — не жать впустую в бою */, 1290206130 /* Аура воздаяния */,
+                                242961069 /* Благословение могущества */, 1433786557 /* Благословение мудрости */,
+                                904078709 /* Камень возвращения */,
                                 1791702616 /* Благословение неприкосновенности (Y, id 20911) */,
                                 1191036009 /* Освящение (клавиша 9, id 20116/26573) */,
                                 489876339 /* Праведное неистовство (T) */],
@@ -51,6 +57,7 @@ Object.assign(bot, {
                               1488691226: 0.35 /* Свет небес */,
                               1396923377: 0.09 /* Возложение рук — только при HP < 9% (как в аварийном блоке) */ },
                  mountKey: 'L' /* Призыв боевого коня */, autoAttack: true, stepBackOnFacing: true,
+                 finishers: [1101686797 /* Молот гнева (клавиша U, id 24275): только при HP цели < 20% */],
                  pullSpells: [1700418603 /* Длань возмездия */, 1953631017 /* «Дань возмездия» — на случай другого написания */],
                  buffs: [
         { key: 'G', name: 'Печать праведности',    everyMs: 25 * 60000 },
@@ -61,7 +68,19 @@ Object.assign(bot, {
     return C[this.profile] || null;
   },
   // ротация для боя: закреплённая в профиле, иначе выученная/заданная (this.rotation)
-  activeRotation() { const c = this.combatCfg(); return (c && c.rotation) || this.rotation || []; },
+  // Порядок: сначала правила с условием по HP (экстренные: maxHpPct / maxPetHpPct) — они всегда выше; затем cc.priority
+  // (умения профиля по хешу, в заданном порядке); потом остальное из ротации без дублей.
+  activeRotation() {
+    const c = this.combatCfg();
+    const base = (c && c.rotation) || this.rotation || [];
+    if (!c || !c.priority || !c.priority.length) return base;
+    const cond = r => !!(r.maxHpPct || r.maxPetHpPct);
+    const prio = c.priority.map(h => (typeof h === 'object' ? h : { spell: h }));     // число (хеш) или правило с условием
+    const prioSpells = prio.map(r => r.spell);
+    return base.filter(cond)
+      .concat(prio)
+      .concat(base.filter(r => !cond(r) && !(r.spell && prioSpells.includes(r.spell))));
+  },
   // запись заклинания-открывателя боя (cc.pullSpells) на панели умений или null
   pullRec(cc) {
     if (!cc || !cc.pullSpells) return null;
@@ -162,12 +181,13 @@ Object.assign(bot, {
     const t0 = Date.now(), fightStart = t0;
     let feignAt = 0;
     let lastPress = 0, handledErr = 0, turns = 0, retreats = 0, lastRetreat = 0, deadSince = 0;
-    let noAttackSince = 0, hpAtNoAttack = 0, lastSwitch = 0, trapAt = 0, pullTries = 0, lastPull = 0, lastAutoAtk = 0, stepBacks = 0, lastAttackerTry = 0;
+    let noAttackSince = 0, hpAtNoAttack = 0, lastSwitch = 0, trapAt = 0, pullTries = 0, lastPull = 0, lastAutoAtk = 0, stepBacks = 0, lastAttackerTry = 0, lastFinish = 0, openerWaited = false, openerPressed = false, openerNoted = false;
     const hpHist = [];
-    this.fightMobs = 1;
+    this.fightMobs = 1; this.fightOpener = null; this.fightMaxAttackers = 0;
     const cc = this.combatCfg();
     while (this.running) {
       const s = this.state(), hpPct = s.hp / s.hpMax;
+      if (s.attackers != null && s.attackers > this.fightMaxAttackers) this.fightMaxAttackers = s.attackers;   // для журнала боя
       if (s.hp > 0) this.lastAlive = { hpPct: +hpPct.toFixed(2), manaPct: s.manaPct, pet: s.pet };   // для отчёта о смерти
       if (s.hp === 0 || this.dead()) { this.release(); return { result: 'персонаж погиб', ...s }; }   // мёртвый не жмёт клавиши
       if (!s.fight && (!s.target || s.targetHp === 0)) return { result: 'бой окончен', ...s };
@@ -343,12 +363,38 @@ Object.assign(bot, {
       // Бой начинаем заклинанием-открывателем (паладин: Длань возмездия): как только достаёт до цели.
       // До 3 попыток с паузой ≥ 1 с, потом обычная ротация. Нет на панели — правило молча пропускается.
       if (cc && cc.pullSpells && !s.fight && pullTries < 3 && now - lastPull > 1000) {
-        const pr = this.pullRec(cc);
+        let pr = this.pullRec(cc);
+        // готовность и дальность в spells() обновляются раз в 0.5 с: цель уже в зоне (ближе ~28 ярдов), а умение «не готово /
+        // вне дальности» — один раз подождём до 0.8 с, вместо того чтобы начать бой обычным ударом без открывателя
+        if (pr && !(pr.ready === 1 && pr.inRange !== 0) && (s.tDist & 1) && !openerWaited) {
+          openerWaited = true;
+          const w0 = Date.now();
+          while (Date.now() - w0 < 800 && this.running && !this.state().fight) {
+            await sleep(100);
+            pr = this.pullRec(cc);
+            if (pr && pr.ready === 1 && pr.inRange !== 0) break;
+          }
+        }
         if (pr && pr.ready === 1 && pr.inRange !== 0) {
-          pullTries++; lastPull = now;
+          pullTries++; lastPull = now; openerPressed = true;
+          this.fightOpener = 'нажата (попытка ' + pullTries + ')';
           await this.pressSpell(pr.nameHash);
           continue;
         }
+        if (pr) this.fightOpener = 'не нажата: ' + (pr.ready !== 1 ? 'не готова' : 'вне дальности') + ', tDist ' + s.tDist;
+        else this.fightOpener = 'не нажата: умения нет на панели';
+      }
+      // бой начался раньше, чем открыватель успел: причина в журнал (поле opener у записи боя)
+      if (cc && cc.pullSpells && s.fight && !openerPressed && !openerNoted) {
+        openerNoted = true;
+        this.fightOpener = 'моб начал бой первым' + (this.fightOpener ? ' (' + this.fightOpener + ')' : '');
+      }
+
+      // Добивающие умения (паладин: Молот гнева — игра считает его доступным, только когда у цели < 20% HP): готовность
+      // берём из игры (IsUsableAction), так что нажмётся ровно тогда. Приоритет выше обычной ротации; не чаще раза в 1,5 с.
+      if (cc && cc.finishers && s.fight && s.target && s.enemy && s.targetHp > 0 && now - lastFinish > 1500) {
+        const fr = cc.finishers.map(spellRec).find(r => r && r.ready === 1 && r.inRange !== 0);
+        if (fr) { lastFinish = now; await this.pressSpell(fr.nameHash); continue; }
       }
 
       // Ближний бой: включаем автоатаку командой /startattack (не переключатель — выключить ею нельзя), как только
@@ -381,6 +427,7 @@ Object.assign(bot, {
           if (cc && cc.meleeSpell && r.spell === cc.meleeSpell && rec.inRange !== 1) continue;
           if (r.maxHpPct && hpPct >= r.maxHpPct) continue;
           if (r.maxPetHpPct && !this.petNeedsHeal(r.maxPetHpPct)) continue;
+          if (!this.attackersOk(r)) continue;                      // minAttackers: нужно столько врагов, бьющих игрока
           if ((r.outOfCombatOnly || r.spell === 1700418603 || r.key === 'O') && s.fight) continue;
           if (r.waitAfter) {
             const ref = r.waitAfter.spell ? (this.lastSpellAt[r.waitAfter.spell] || 0) : (this.lastKey[r.waitAfter.key] || 0);

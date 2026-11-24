@@ -68,6 +68,22 @@ public class GameBridge {
         return m;
     }
 
+    private volatile long lastWarmUpRequestAt;
+
+    /**
+     * Сборщик событий (лидер) видит, что игра не подключена или бот не загружен: просит фоновое подключение
+     * ({@link BotReadiness#warmUp()}: подключиться к вкладке, при необходимости вставить bot.js). Не чаще раза в 30 с.
+     * Иначе после одного таймаута лидер оставался слепым: к игре подключается только вызов инструмента, а команды идут в другой процесс.
+     */
+    public void requestWarmUp() {
+        if (connection.isBusy()) return;
+        long now = System.currentTimeMillis();
+        if (now - lastWarmUpRequestAt < 30_000) return;
+        lastWarmUpRequestAt = now;
+        log.info("Игра не подключена или бот не загружен — запрашиваю фоновое подключение");
+        connection.submit(readiness::warmUp);
+    }
+
     /** Фоновое подключение сразу после старта сервера (см. {@link BotReadiness#warmUp()}). */
     @EventListener(ApplicationReadyEvent.class)
     public void connectOnStartup() {
@@ -109,6 +125,30 @@ public class GameBridge {
         connection.call(READY_OPERATION_TIMEOUT_MS, () -> {
             readiness.ensureReady();
             return null;
+        });
+    }
+
+    /**
+     * Проверка моста «игра ↔ бот» перед автономной охотой. null — всё в порядке; иначе причина (охоту не стартуем).
+     * Сначала обычная подготовка; если данные неполные (таблицы не найдены, цепочка Lua не заполняется) — один раз
+     * принудительно повторяем Lua-подготовку и проверяем снова.
+     */
+    public String preflight() {
+        return connection.call(READY_OPERATION_TIMEOUT_MS, () -> {
+            readiness.ensureReady();
+            java.util.List<String> miss = readiness.dataMissing();
+            if (miss.isEmpty()) return null;
+            log.warn("Перед стартом данные игры неполные ({}) — повторяю подготовку", miss);
+            readiness.allowSetupRedo();
+            readiness.ensureReady();
+            miss = readiness.dataMissing();
+            if (miss.isEmpty()) {
+                log.info("Данные игры восстановлены повторной подготовкой");
+                return null;
+            }
+            log.warn("Данные игры неполные и после повтора: {}", miss);
+            return "данные из игры неполные (не хватает: " + String.join(", ", miss) + "). Перезагрузи страницу игры (F5), "
+                    + "войди в мир и скажи «перезагрузи бота»";
         });
     }
 

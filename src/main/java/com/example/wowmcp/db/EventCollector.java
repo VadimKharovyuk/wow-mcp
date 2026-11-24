@@ -114,6 +114,7 @@ public class EventCollector {
         }
         if (!bridge.isBotLoadedIfConnected()) {
             skipNotLoaded.incrementAndGet();
+            bridge.requestWarmUp();           // лидер сам восстанавливает подключение, а не ждёт вызова инструмента
             return;
         }
         Optional<String> drained = bridge.evalIfReady("bot.drainEvents()", 2000);

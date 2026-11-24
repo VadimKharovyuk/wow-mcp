@@ -101,6 +101,56 @@ window.bot = {
     return res[0];
   },
 
+  // сколько разных врагов ударили игрока за последние ~4 с (журнал боя, lua/combat.lua); null — таблицы нет (старый Lua)
+  attackers() {
+    if (this.aaddr == null) return null;
+    const v = this.mem()[this.aaddr + 3 * this.astride];
+    return Number.isFinite(v) ? v | 0 : null;
+  },
+  // Полосы здоровья врагов на экране (lua/plates.lua): [{fx, fy, target, reaction, level, nameHash}], цель первой, затем ближние
+  // к центру. fx/fy — доли ширины/высоты экрана (fy снизу). reaction: 0 неизвестно, 1 дружеский, 2 нейтральный, 3 враждебный.
+  // null — таблицы нет (старый Lua); [] — полос нет.
+  plates() {
+    if (this.paddr == null) return null;
+    const H = this.mem(), g = n => H[this.paddr + (n - 1) * this.pstride];
+    const count = Math.min(g(4) | 0, 8), out = [];
+    for (let i = 0; i < count; i++) {
+      const b = 6 + i * 5, fx = g(b), fl = g(b + 2) | 0;
+      if (!(fx > 0)) continue;
+      out.push({ fx: +fx.toFixed(3), fy: +g(b + 1).toFixed(3), target: (fl & 1) === 1, reaction: fl >> 1, level: g(b + 3) | 0, nameHash: g(b + 4) | 0 });
+    }
+    return out;
+  },
+  // выбрана ли цель (по данным Lua-модуля полос); null — таблицы нет
+  plateHasTarget() {
+    if (this.paddr == null) return null;
+    return this.mem()[this.paddr + 4 * this.pstride] === 1;
+  },
+  // сколько раз падал Lua-код модулей combat (A[5]) и plates (P[46]); null — таблицы нет (старый Lua)
+  luaErrors() {
+    if (this.aaddr == null && this.paddr == null) return { combat: null, plates: null };
+    const H = this.mem();
+    return { combat: this.aaddr == null ? null : H[this.aaddr + 4 * this.astride] | 0,
+             plates: this.paddr == null ? null : H[this.paddr + 45 * this.pstride] | 0 };
+  },
+  // Полоса выбранной цели на экране (доля ширины fx) или null — тогда ищем курсором, как раньше.
+  plateAim() {
+    const p = this.plates();
+    const t = p && p.find(x => x.target);
+    const r = t && t.fx > 0.02 && t.fx < 0.98 ? { fx: t.fx, fy: t.fy, plate: true } : null;
+    // статистика (видна в статусе): цель выбрана, а её полосы нет — значит, полоса вне экрана или данные не сходятся
+    const gs = this.grindStats;
+    if (gs && p && this.plateHasTarget()) { const k = r ? 'plateHit' : 'plateMiss'; gs[k] = (gs[k] || 0) + 1; }
+    return r;
+  },
+
+  // у правила есть условие minAttackers — выполнено ли оно; неизвестное число врагов считаем «не выполнено»
+  attackersOk(rule) {
+    if (!rule || !rule.minAttackers) return true;
+    const n = this.attackers();
+    return n != null && n >= rule.minAttackers;
+  },
+
   // чего не хватает из данных игры: таблицы S/I/Q/D не найдены или не заполняется Lua-цепочка (уровень игрока 0 у живого).
   // Пустой массив — всё на месте. Нужна ensureReady: версия Lua может совпадать, а подготовка быть применена не целиком.
   dataMissing() {
@@ -130,6 +180,16 @@ window.bot = {
     const d = await this.findTable(777007.5, 777008.5, 2);
     if (d) { this.daddr = d[0]; this.dstride = d[1]; console.log('НАШЁЛ D (смерть) ✅', this.deathInfo()); }
     else console.warn('Не нашёл D (смерть).');
+    // A — сколько врагов бьёт игрока (lua/combat.lua); нет в старом Lua — число врагов неизвестно (null)
+    const a = await this.findTable(777011.5, 777012.5, 2);
+    if (a) { this.aaddr = a[0]; this.astride = a[1]; console.log('НАШЁЛ A (число врагов) ✅', this.attackers()); }
+    else console.warn('Не нашёл A (число врагов): старый Lua?');
+    // P — полосы здоровья над врагами на экране (lua/plates.lua)
+    const pl = await this.findTable(777013.5, 777014.5, 2);
+    if (pl) { this.paddr = pl[0]; this.pstride = pl[1]; console.log('НАШЁЛ P (полосы врагов) ✅', this.plates()); }
+    else console.warn('Не нашёл P (полосы врагов): старый Lua?');
+    if (this.log) this.log(a && pl ? 'info' : 'warn', 'bridge', 'таблицы Lua: A (число врагов) ' + (a ? 'есть' : 'НЕТ') + ', P (полосы врагов) ' + (pl ? 'есть' : 'НЕТ')
+      + (a && pl ? '' : ' — старый Lua? нужен ./deploy.sh'), { tableA: !!a, tableP: !!pl, tableI: this.iaddr != null, tableQ: this.qaddr != null, tableD: this.daddr != null });
   },
 
   // D-таблица: смерть/призрак/труп. null — таблица не найдена (старый Lua).
@@ -216,7 +276,7 @@ window.bot = {
       moAlive: g(21) === 1, moLvl: g(22), kills: g(23), zone: g(24), pLvl: g(25),
       targetHpMax: g(26), targetHpPct: g(26) > 0 ? +(g(10) / g(26)).toFixed(2) : 0,
       useCount: g(27), useSlot: g(28),
-      luaVer: g(29),
+      luaVer: g(29), attackers: this.attackers(),
       pet,
       petExists: !!pet && pet.exists, petHpPct: pet ? pet.hpPct : 0, petDead: !!pet && pet.exists && pet.dead,
       ammo: di ? di.ammo : 0,
@@ -393,6 +453,7 @@ window.bot = {
     const s = this.state();
     const di = this.deathInfo();
     const xp = di && di.xpMax > 0 ? Math.min(100, Math.round(di.xp / di.xpMax * 100)) : null;
-    return JSON.stringify({ jsVer: window.__botJsVer || null, job: this.job, hpPct: Math.round(s.hp / s.hpMax * 100), ...s, xpPct: xp, xpLeftPct: xp === null ? null : 100 - xp, healLog: (this.healLog || []).slice(-10), grind: this.grindStats ? this.grindTiming(this.grindStats) : null, route: this.routeProgress || null, hunt: this.huntStats || null, warn: (this.warnings || []).slice(-5) });
+    const miss = this.dataMissing();       // мост игра↔бот: если чего-то не хватает, ниже цифры (мана, зона, сумки) недостоверны
+    return JSON.stringify({ jsVer: window.__botJsVer || null, bridgeOk: miss.length === 0, plates: this.plates(), luaErrors: this.luaErrors(), bridgeMissing: miss.length ? miss : undefined, job: this.job, hpPct: Math.round(s.hp / s.hpMax * 100), ...s, xpPct: xp, xpLeftPct: xp === null ? null : 100 - xp, healLog: (this.healLog || []).slice(-10), grind: this.grindStats ? this.grindTiming(this.grindStats) : null, route: this.routeProgress || null, hunt: this.huntStats || null, warn: (this.warnings || []).slice(-5) });
   }
 };

@@ -289,10 +289,28 @@ class BotReadiness {
      * Версия Lua совпала, но часть таблиц (сумки I, питомец Q, смерть D) не найдена или не заполняется цепочка полей
      * (уровень игрока 0): подготовка была применена не целиком (например, потерялась строка чата). Тогда её надо выполнить заново.
      */
-    private boolean incompleteData() {
+    /** Чего не хватает из данных игры (таблицы S/I/Q/D, поля Lua-цепочки); пусто — всё на месте. Ошибка чтения — пусто. */
+    java.util.List<String> dataMissing() {
         try {
             Object r = page().evaluate("() => (window.bot && typeof window.bot.dataMissing === 'function') ? window.bot.dataMissing() : []");
-            if (r instanceof java.util.Collection<?> c && !c.isEmpty()) {
+            java.util.List<String> out = new java.util.ArrayList<>();
+            if (r instanceof java.util.Collection<?> c) c.forEach(x -> out.add(String.valueOf(x)));
+            return out;
+        } catch (RuntimeException e) {
+            log.debug("Проверка полноты данных не удалась: {}", e.getMessage());
+            return java.util.List.of();
+        }
+    }
+
+    /** Снять ограничение «не чаще раза в 2 минуты» для следующей проверки полноты (перед стартом охоты). */
+    void allowSetupRedo() {
+        lastIncompleteRedoAt = 0;
+    }
+
+    private boolean incompleteData() {
+        try {
+            java.util.List<String> c = dataMissing();
+            if (!c.isEmpty()) {
                 long now = System.currentTimeMillis();
                 if (now - lastIncompleteRedoAt < INCOMPLETE_REDO_MS) {
                     log.warn("Данные игры неполные ({}), подготовку уже повторяли недавно — пропускаю", c);

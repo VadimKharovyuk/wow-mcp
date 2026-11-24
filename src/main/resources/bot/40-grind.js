@@ -16,6 +16,7 @@ Object.assign(bot, {
     maxKills: 10,       // 0 = без лимита
     loot: false,        // собирать добычу после боя; false — просто убивать, без лута
     maxMinutes: 30,
+    nameplates: true,   // включать полосы здоровья над врагами (/console nameplateShowEnemies 1): по ним проще найти цель курсором; false — не трогать
     mountTravel: true,  // перебежки между точками верхом (профиль с mountKey), от mountMinDist
     mountMinDist: 0.6,  // единицы карты (~30 м): ближе пешком
     respawnSec: 300,    // через сколько секунд место из базы снова считается «тёплым» (5 минут)
@@ -256,6 +257,7 @@ Object.assign(bot, {
     const t0 = Date.now();
     let ok;
     this.approachWhy = null; this.approachSteers = 0; this.approachScans = 0; this.approachFallback = false; this.approachSteered = false; this.approachAim = null;
+    this.approachStage = null; this.approachTurns = 0; const prox0 = this.proximity();
     if (far) {
       // далёкая цель: бежим до 15 с, пока персонаж реально движется и не вышел за радиус охоты от якоря
       const st = this.grindStats, cfg = this.grindCfg || {};
@@ -279,21 +281,31 @@ Object.assign(bot, {
       // обычная цель (Tab, на бегу, на точке): Tab берёт врага и сбоку, а голый бег по прямой уводил от него.
       // Находим цель на экране, поворачиваемся и подруливаем на бегу — как для далёких; не нашли — бежим прямо, как раньше
       this.approachSteered = true;
-      try { ok = await this.farRunSteered(null, null, Math.max(maxMs, 8000)); } finally { this.key('W', false); this.key('A', false); this.key('D', false); }
+      try { ok = await this.farRunSteered(null, null, Math.max(maxMs, 8000), { turn: false }); } finally { this.key('W', false); this.key('A', false); this.key('D', false); }
       if (!ok && this.approachWhy === 'цель не на экране' && this.grinding) {
+        // не нашли цель на экране даже плотным сканом: не бежим вслепую 10 с, а короткими кусками (1 с) с повторным
+        // плотным сканом после каждого; нашли — довернули и бежим дальше; за 3 куска не дошли — сдаёмся
         this.approachWhy = null; this.approachFallback = true;
-        ok = await this._approach(maxMs);
+        const abort = () => !this.grinding;
+        for (let r = 0; r < 3 && !ok && this.grinding; r++) {
+          try { ok = await this._approach(1000); } finally { this.key('W', false); }
+          if (ok || !this.grinding) break;
+          const g = await this.scanOnScreen({ dense: true, abort });
+          if (g) await this.aimBy(g.fx, abort);
+        }
+        if (!ok && !this.approachWhy) this.approachWhy = 'нет сближения';
       }
     } else {
       ok = await this._approach(maxMs);
     }
     if (!far && this.approachSteered && this.log) {
       this.log(ok ? 'info' : 'warn', 'approach', 'подход с подруливанием: ' + (ok ? 'дошёл' : (this.approachWhy || 'не дошёл')),
-        { steered: true, ok: !!ok, why: this.approachWhy || null, durMs: Date.now() - t0, steers: this.approachSteers || 0, scans: this.approachScans || 0, fallback: !!this.approachFallback, aim: this.approachAim || null });
+        { steered: true, ok: !!ok, why: this.approachWhy || null, durMs: Date.now() - t0, steers: this.approachSteers || 0, scans: this.approachScans || 0, scanMs: this.approachScanMs || 0, dense: !!this.approachDense, fallback: !!this.approachFallback, aim: this.approachAim || null });
     }
     if (far) {
       const why = ok ? 'дошёл' : (this.approachWhy || 'время вышло');
-      if (this.log) this.log(ok ? 'info' : 'warn', 'approach', 'далёкая цель: ' + why, { far: true, ok: !!ok, why, durMs: Date.now() - t0, steers: this.approachSteers || 0, scans: this.approachScans || 0, fallback: !!this.approachFallback, aim: this.approachAim || null });
+      if (this.log) this.log(ok ? 'info' : 'warn', 'approach', 'далёкая цель: ' + why, { far: true, ok: !!ok, why, durMs: Date.now() - t0, steers: this.approachSteers || 0, scans: this.approachScans || 0, fallback: !!this.approachFallback, aim: this.approachAim || null,
+          stage: this.approachStage || null, turns: this.approachTurns || 0, prox0, prox1: this.proximity() });
     }
     if (far && !ok) {
       this.nameCool = this.nameCool || {};
@@ -305,10 +317,12 @@ Object.assign(bot, {
 
   // ---- далёкая цель: найти её на экране курсором, повернуться и бежать с подруливанием ----
   // Ищем курсором по полосе экрана: Q[14] === 2, когда под курсором именно наша цель. Возвращает {fx, fy} или null.
-  async scanOnScreen({ narrow = false, abort = null } = {}) {
+  // dense — плотный скан по центральной зоне экрана (строки и выше модели: там полоса здоровья над врагом) — когда обычный не нашёл
+  async scanOnScreen({ narrow = false, dense = false, abort = null } = {}) {
     // полоса по центру — частый шаг (цель вдали маленькая), выше и ниже — редкий
-    const plan = narrow ? [[0.46, 0.04], [0.54, 0.04]] : [[0.5, 0.03], [0.42, 0.06], [0.58, 0.06]];
-    const lo = narrow ? 0.28 : 0.04, hi = narrow ? 0.72 : 0.96;
+    const plan = dense ? [[0.5, 0.04], [0.44, 0.04], [0.56, 0.04], [0.38, 0.04], [0.32, 0.04]]
+      : narrow ? [[0.46, 0.04], [0.54, 0.04]] : [[0.5, 0.03], [0.42, 0.06], [0.58, 0.06]];
+    const lo = dense ? 0.2 : narrow ? 0.28 : 0.04, hi = dense ? 0.8 : narrow ? 0.72 : 0.96;
     for (const [fy, step] of plan) {
       const cols = [];
       for (let fx = lo; fx <= hi + 1e-9; fx += step) cols.push(fx);
@@ -335,38 +349,70 @@ Object.assign(bot, {
 
   // Бежим к далёкой цели: 1) ищем её на экране (до 4 поворотов по ~90°), 2) бежим кусками по 1.2 с и после каждого
   // подруливаем по положению цели на экране. Сдаёмся: цель не нашли, потеряли, упёрлись, вышли за радиус, 15 с.
-  async farRunSteered(anchor, limit, maxMs) {
+  // opts.turn === false (обычная цель из Tab: она впереди): не поворачиваемся вслепую на 86°, а повторяем скан плотнее
+  async farRunSteered(anchor, limit, maxMs, opts = {}) {
     const t0 = Date.now(), abort = () => !this.grinding;
     this.approachSteers = 0;
-    let f = null;
-    for (let k = 0; k < 2 && !f && this.grinding; k++) {
-      f = await this.scanOnScreen({ narrow: false, abort });
-      this.approachScans = k + 1;
-      if (!f && k < 1) await this.turnTo(this.state().facing + 1.5, 2500, abort);
+    // Сначала полоса здоровья цели (lua/plates.lua): направление известно сразу, без поиска курсором. Нет полосы (цель вне экрана
+    // или старый Lua) — ищем курсором, как раньше.
+    let f = this.plateAim(), dense = false, stage = f ? 'полоса' : 'обычный';
+    if (!f) f = await this.scanOnScreen({ narrow: false, abort });
+    this.approachScans = f && f.plate ? 0 : 1; this.approachTurns = 0;
+    if (!f && this.grinding) {
+      dense = true; stage = 'плотный';
+      f = await this.scanOnScreen({ dense: true, abort });
+      this.approachScans = 2;
+      if (opts.turn !== false) {
+        // далёкая цель из /target Имя бывает где угодно (и за спиной): полный осмотр — до трёх поворотов по 90° с обычным
+        // сканом после каждого; нашли — доворот и бег. Раньше был один слепой поворот и бег прямо вслепую
+        for (let k = 1; k <= 3 && !f && this.grinding; k++) {
+          await this.turnTo(this.state().facing + Math.PI / 2, 2500, abort);
+          this.approachTurns = k;
+          f = await this.scanOnScreen({ narrow: false, abort });
+          this.approachScans++;
+          if (f) stage = 'поворот ' + k;
+        }
+      }
     }
+    this.approachStage = f ? stage : 'не нашёл';
+    this.approachScanMs = Date.now() - t0; this.approachDense = dense;
+    { const gs = this.grindStats;                          // статистика поиска цели на экране — видна в статусе
+      if (gs) { const k = f ? (dense ? 'scanDense' : 'scanFound') : 'scanMiss'; gs[k] = (gs[k] || 0) + 1; } }
     if (!f) { this.approachWhy = 'цель не на экране'; return false; }
-    this.approachScans = this.approachScans || 1;
     const aim0 = await this.aimBy(f.fx, abort);
     // уточнение: грубый поворот по экрану неточен (1.6 рад на экран — примерно). Узкий скан по центру: если цель не по центру,
     // подправляем ещё раз (до 2), потом бежим. Не нашли в узкой полосе — дальше подруливание широким сканом в цикле
-    this.approachAim = { fx0: +f.fx.toFixed(2), fx1: +f.fx.toFixed(2), refines: 0, expected: aim0 ? aim0.expected : 0, actual: aim0 ? aim0.actual : 0 };
+    this.approachAim = { fx0: +f.fx.toFixed(2), fx1: +f.fx.toFixed(2), refines: 0, expected: aim0 ? aim0.expected : 0, actual: aim0 ? aim0.actual : 0, src: f.plate ? 'plate' : 'scan' };
     for (let r = 0; r < 2 && this.grinding; r++) {
-      const g = await this.scanOnScreen({ narrow: true, abort });
+      // по полосе — перечитываем её положение (Lua обновляет таблицу ~10 раз в секунду); без полосы — узкий скан курсором
+      let g;
+      if (f.plate) { await sleep(150); g = this.plateAim(); } else g = await this.scanOnScreen({ narrow: true, abort });
       if (!g) break;
       this.approachAim.fx1 = +g.fx.toFixed(2);
       if (Math.abs(g.fx - 0.5) <= 0.06) break;                          // по центру
       await this.aimBy(g.fx, abort); this.approachAim.refines++;
     }
+    // проверка точности наведения по полосе: курсором (узкая полоса по центру) — совпала ли цель; только первые 40 подходов
+    if (f.plate && (this.plateChecks || 0) < 40 && this.grinding) {
+      this.plateChecks = (this.plateChecks || 0) + 1;
+      const chk = await this.scanOnScreen({ narrow: true, abort });
+      this.approachAim.check = chk ? +chk.fx.toFixed(2) : null;           // null — курсор по центру цель не нашёл
+    }
     let s0 = this.state(), pos = { x: s0.x, y: s0.y }, stuck = 0;
+    let bestPr = this.proximity(), lastGainAt = Date.now();
     while (this.grinding && Date.now() - t0 < maxMs) {
       if (await this._approach(1200)) return true;
       const s = this.state();
       if (s.fight) return true;
+      // не стало ближе (всё ещё дальше 28 ярдов) за 8 с: бежим не туда — сдаёмся, а не бегаем до конца времени
+      { const pr = this.proximity();
+        if (pr > bestPr) { bestPr = pr; lastGainAt = Date.now(); }
+        else if (pr === 0 && Date.now() - lastGainAt > 8000) { this.approachWhy = 'нет сближения'; this.key('W', false); return false; } }
       if (anchor && limit && Math.hypot(s.x - anchor.x, s.y - anchor.y) > limit) { this.approachWhy = 'вышел за радиус'; return false; }
       if (Math.hypot(s.x - pos.x, s.y - pos.y) < 0.02) { if (++stuck >= 2) { this.approachWhy = 'упёрся'; return false; } } else stuck = 0;
       pos = { x: s.x, y: s.y };
       this.key('W', true);                                              // не стоим, пока ищем цель
-      let g = await this.scanOnScreen({ narrow: true, abort });
+      let g = this.plateAim() || await this.scanOnScreen({ narrow: true, abort });
       if (!g) g = await this.scanOnScreen({ narrow: false, abort });
       if (!g) { this.key('W', false); this.approachWhy = 'потерял цель'; return false; }
       this.approachSteers++;
@@ -390,6 +436,10 @@ Object.assign(bot, {
           if (fa.anchor && Math.hypot(s.x - fa.anchor.x, s.y - fa.anchor.y) > fa.limit) { this.approachWhy = 'вышел за радиус'; return true; }
           if (Math.hypot(s.x - mv.x, s.y - mv.y) > 0.02) mv = { x: s.x, y: s.y, t: now };
           else if (now - mv.t > 2000) { this.approachWhy = 'упёрся'; return true; }
+          // слепой бег: за 7 с не стало ближе 28 ярдов — бежим не туда, не тратим остальные ~10 с
+          const prf = this.proximity();
+          if (prf > best) { best = prf; lastGain = now; }
+          else if (prf === 0 && now - lastGain > 7000) { this.approachWhy = 'нет сближения'; return true; }
           return false;
         }
         const pr = this.proximity();
@@ -532,6 +582,7 @@ Object.assign(bot, {
     cfg.names = (opts && opts.names) || [];
     cfg.emptyAfterMs = (opts && opts.emptyAfterMs) || 0;
     this.grinding = true;
+    if (cfg.nameplates !== false) { try { await chat('/console nameplateShowEnemies 1'); } catch (e) { /* не критично */ } }
     const anchor = this.state(), t0 = Date.now();
     this.grindSpots = (opts.spots || []).map(p => ({ ...p, visitedAt: 0, empty: 0 }));
     this.patrolIdx = 0;

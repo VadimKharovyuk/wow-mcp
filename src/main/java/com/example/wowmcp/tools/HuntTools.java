@@ -61,6 +61,10 @@ public class HuntTools {
         if (!db.isEnabled()) {
             return jsonResult("база не настроена — hunt недоступен");
         }
+        String bridgeProblem = bridge.preflight();      // мост игра↔бот исправен? иначе не стартуем вслепую
+        if (bridgeProblem != null) {
+            return jsonResult("охота не запущена: " + bridgeProblem);
+        }
         GameState state = GameState.parse(bridge.report());
         Integer zoneId = hunts.zoneId(state.zone());
         if (zoneId == null) {
