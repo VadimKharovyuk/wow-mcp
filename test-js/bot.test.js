@@ -502,3 +502,51 @@ test('fight: счётчик врагов неизвестен (null) — быс�
   await b.fight({ timeout: 2000 }).catch(() => {});
   assert.equal(calls.switched, 0);
 });
+
+// --- память мест упора и обход ---
+test('noteStuck: повтор в течение 20 с — один случай; позже — второй; надёжна при n>=2', () => {
+  const b = fresh();
+  const s = { zone: 215, x: 20, y: 36, facing: 1 };
+  b.noteStuck(s, 'тест'); b.noteStuck(s, 'тест');
+  assert.equal(b.stuckList().length, 1);
+  assert.equal(b.stuckList()[0].n, 1);
+  b.stuckList()[0].at -= 30000;
+  b.noteStuck({ ...s, x: 20.02 }, 'тест');
+  assert.equal(b.stuckList()[0].n, 2);
+});
+
+test('stuckAhead: только надёжная точка впереди по курсу, в той же зоне', () => {
+  const b = fresh();
+  const L = b.stuckList();
+  // facing 0 = на север: dy<0 в координатах карты (у — вниз)
+  L.push({ zone: 1, x: 50, y: 49.9, n: 2, at: 0 });     // 0.1 впереди
+  L.push({ zone: 1, x: 50, y: 50.1, n: 5, at: 0 });     // сзади
+  L.push({ zone: 2, x: 50, y: 49.95, n: 5, at: 0 });    // другая зона
+  L.push({ zone: 1, x: 49.95, y: 49.95, n: 1, at: 0 }); // ненадёжная
+  const a = b.stuckAhead({ zone: 1, x: 50, y: 50, facing: 0 });
+  assert.ok(a);
+  assert.equal(a.p.y, 49.9);
+  const back = b.stuckAhead({ zone: 1, x: 50, y: 50, facing: Math.PI });           // развернулись: теперь впереди та, что была сзади
+  assert.equal(back.p.y, 50.1);
+});
+
+test('avoidStuck: уходит в сторону от точки, не больше 2 раз', async () => {
+  const b = fresh();
+  b.stuckList().push({ zone: 1, x: 50, y: 49.9, n: 3, at: 0 });
+  let facing = 0, x = 50;
+  const keys = [];
+  b.key = (k, on) => { keys.push(k + (on ? '+' : '-')); if (on && k === 'D') facing -= 0.3; if (on && k === 'A') facing += 0.3; };
+  b.state = () => { if (keys.includes('W+')) x += 0.05; return { zone: 1, x, y: 50, facing, fight: false }; };
+  const ctx = { n: 0 };
+  const done = await b.avoidStuck({ zone: 1, x: 50, y: 50, facing: 0 }, ctx);
+  assert.equal(done, true);
+  assert.equal(ctx.n, 1);
+  assert.ok(keys.some(k => k === 'A+' || k === 'D+'));
+  ctx.n = 2;
+  assert.equal(await b.avoidStuck({ zone: 1, x: 50, y: 50, facing: 0 }, ctx), false);
+});
+
+test('avoidStuck: нет точек — ничего не делает', async () => {
+  const b = fresh();
+  assert.equal(await b.avoidStuck({ zone: 1, x: 50, y: 50, facing: 0 }, { n: 0 }), false);
+});

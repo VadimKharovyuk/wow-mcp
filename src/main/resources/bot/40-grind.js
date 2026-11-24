@@ -399,6 +399,7 @@ Object.assign(bot, {
       this.approachAim.check = chk ? +chk.fx.toFixed(2) : null;           // null — курсор по центру цель не нашёл
     }
     let s0 = this.state(), pos = { x: s0.x, y: s0.y }, stuck = 0;
+    const avoid = { n: 0, abort };
     let bestPr = this.proximity(), lastGainAt = Date.now();
     while (this.grinding && Date.now() - t0 < maxMs) {
       if (await this._approach(1200)) return true;
@@ -409,7 +410,7 @@ Object.assign(bot, {
         if (pr > bestPr) { bestPr = pr; lastGainAt = Date.now(); }
         else if (pr === 0 && Date.now() - lastGainAt > 8000) { this.approachWhy = 'нет сближения'; this.key('W', false); return false; } }
       if (anchor && limit && Math.hypot(s.x - anchor.x, s.y - anchor.y) > limit) { this.approachWhy = 'вышел за радиус'; return false; }
-      if (Math.hypot(s.x - pos.x, s.y - pos.y) < 0.02) { if (++stuck >= 2) { this.approachWhy = 'упёрся'; return false; } } else stuck = 0;
+      if (Math.hypot(s.x - pos.x, s.y - pos.y) < 0.02) { if (++stuck >= 2) { this.noteStuck(s, 'подход'); this.approachWhy = 'упёрся'; return false; } } else stuck = 0;
       pos = { x: s.x, y: s.y };
       this.key('W', true);                                              // не стоим, пока ищем цель
       let g = this.plateAim() || await this.scanOnScreen({ narrow: true, abort });
@@ -417,6 +418,11 @@ Object.assign(bot, {
       if (!g) { this.key('W', false); this.approachWhy = 'потерял цель'; return false; }
       this.approachSteers++;
       await this.aimBy(g.fx, abort);
+      // впереди запомненное место упора — обходим сбоку и снова наводимся на цель
+      if (await this.avoidStuck(this.state(), avoid)) {
+        const g2 = this.plateAim() || await this.scanOnScreen({ narrow: true, abort }) || await this.scanOnScreen({ narrow: false, abort });
+        if (g2) await this.aimBy(g2.fx, abort);
+      }
     }
     this.key('W', false);
     if (!this.approachWhy) this.approachWhy = 'время вышло';
@@ -435,7 +441,7 @@ Object.assign(bot, {
         if (fa) {
           if (fa.anchor && Math.hypot(s.x - fa.anchor.x, s.y - fa.anchor.y) > fa.limit) { this.approachWhy = 'вышел за радиус'; return true; }
           if (Math.hypot(s.x - mv.x, s.y - mv.y) > 0.02) mv = { x: s.x, y: s.y, t: now };
-          else if (now - mv.t > 2000) { this.approachWhy = 'упёрся'; return true; }
+          else if (now - mv.t > 2000) { this.noteStuck(s, 'бег к далёкой цели'); this.approachWhy = 'упёрся'; return true; }
           // слепой бег: за 7 с не стало ближе 28 ярдов — бежим не туда, не тратим остальные ~10 с
           const prf = this.proximity();
           if (prf > best) { best = prf; lastGain = now; }
