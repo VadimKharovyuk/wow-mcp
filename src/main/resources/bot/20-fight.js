@@ -181,7 +181,7 @@ Object.assign(bot, {
     const t0 = Date.now(), fightStart = t0;
     let feignAt = 0;
     let lastPress = 0, handledErr = 0, turns = 0, retreats = 0, lastRetreat = 0, deadSince = 0;
-    let noAttackSince = 0, hpAtNoAttack = 0, lastSwitch = 0, trapAt = 0, pullTries = 0, lastPull = 0, lastAutoAtk = 0, stepBacks = 0, lastAttackerTry = 0, lastFinish = 0, openerWaited = false, openerPressed = false, openerNoted = false;
+    let noAttackSince = 0, hpAtNoAttack = 0, lastSwitch = 0, trapAt = 0, pullTries = 0, lastPull = 0, lastAutoAtk = 0, stepBacks = 0, lastAttackerTry = 0, lastFinish = 0, openerWaited = false, openerPressed = false, openerNoted = false, lastFastSwitch = 0, fastFails = 0;
     const hpHist = [];
     this.fightMobs = 1; this.fightOpener = null; this.fightMaxAttackers = 0;
     const cc = this.combatCfg();
@@ -209,6 +209,24 @@ Object.assign(bot, {
           continue;
         }
         await this.tabTarget(); continue;
+      }
+
+      // Быстрое переключение: нас уже бьют (счётчик врагов из Lua ≥ 1), а выбранная цель нетронута и нас не бьёт
+      // (например, ещё не подошла) — не ждём 5 с, сразу берём того, кто бьёт. Не чаще раза в 3 с; 2 неудачи подряд — отстаём
+      // (атакующий вне экрана/дальний). Число врагов неизвестно (старый Lua) — работает прежнее правило ниже.
+      {
+        const pq = this.pet();
+        if (pq && s.fight && s.attackers >= 1 && s.target && s.enemy && s.targetHp > 0 && s.targetHpPct >= 0.99
+            && !pq.ttPlayer && !pq.ttPet && fastFails < 2 && Date.now() - lastFastSwitch > 3000) {
+          lastFastSwitch = Date.now();
+          const tDist = s.tDist, att = s.attackers;
+          const ok = await this.switchToAttacker();
+          fastFails = ok ? 0 : fastFails + 1;
+          if (ok) this.fightMobs++;
+          this.log('info', 'fight', 'быстрое переключение: ' + (ok ? 'взят атакующий' : 'атакующего не нашёл'),
+              { attackers: att, tDist, tabs: this.lastSwitchTabs, found: ok, hp: Math.round(hpPct * 100) });
+          continue;
+        }
       }
 
       // Цель не бьёт ни игрока, ни питомца ≥ 2 с, а HP игрока падает — бьёт кто-то другой: переключиться

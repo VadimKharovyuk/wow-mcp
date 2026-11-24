@@ -466,3 +466,39 @@ test('drainEvents: рост счётчика ошибок Lua попадает �
   assert.equal(all[0].total, 2);
   assert.equal(JSON.parse(b.drainEvents()).filter(e => e.cat === 'lua').length, 0);   // без роста — не повторяем
 });
+
+// --- быстрое переключение на атакующего ---
+function fastSwitchSetup({ attackers = 1, ttPlayer = false, targetHpPct = 1 } = {}) {
+  const b = fresh();
+  const calls = { switched: 0 };
+  b.state = () => ({ hp: 100, hpMax: 100, fight: true, target: true, enemy: true, targetHp: 500, targetHpPct, attackers, tDist: 1, ready: 0, manaPct: 1 });
+  b.dead = () => false;
+  b.pet = () => ({ exists: false, ttPlayer, ttPet: false });
+  b.switchToAttacker = async () => { calls.switched++; b.lastSwitchTabs = 2; b.running = false; return true; };
+  b.release = () => {};
+  return { b, calls };
+}
+
+test('fight: нас бьёт другой моб, цель нетронута — сразу переключается, без ожидания 5 с', async () => {
+  const { b, calls } = fastSwitchSetup();
+  await b.fight({ timeout: 2000 });
+  assert.equal(calls.switched, 1);
+  const rec = b.logs.find(l => l[2] && String(l[2]).startsWith('быстрое переключение'));
+  assert.ok(rec, 'запись в журнал');
+  assert.equal(rec[3].attackers, 1);
+  assert.equal(rec[3].found, true);
+});
+
+test('fight: цель сама бьёт игрока — быстрого переключения нет', async () => {
+  const { b, calls } = fastSwitchSetup({ ttPlayer: true });
+  setTimeout(() => { b.running = false; }, 300);
+  await b.fight({ timeout: 2000 }).catch(() => {});
+  assert.equal(calls.switched, 0);
+});
+
+test('fight: счётчик врагов неизвестен (null) — быстрого переключения нет', async () => {
+  const { b, calls } = fastSwitchSetup({ attackers: null });
+  setTimeout(() => { b.running = false; }, 300);
+  await b.fight({ timeout: 2000 }).catch(() => {});
+  assert.equal(calls.switched, 0);
+});
