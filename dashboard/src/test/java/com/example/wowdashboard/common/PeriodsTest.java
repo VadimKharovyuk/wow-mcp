@@ -1,4 +1,4 @@
-package com.example.wowdashboard;
+package com.example.wowdashboard.common;
 
 import org.junit.jupiter.api.Test;
 
@@ -20,5 +20,14 @@ class PeriodsTest {
         assertThat(Periods.bucket(24)).isEqualTo("hour");
         assertThat(Periods.bucket(48)).isEqualTo("hour");
         assertThat(Periods.bucket(168)).isEqualTo("day");
+    }
+
+    @Test
+    void minutesAreClampedAndDefaulted() {
+        assertThat(Periods.minutes(null)).isEqualTo(60);
+        assertThat(Periods.minutes(1)).isEqualTo(5);
+        assertThat(Periods.minutes(-3)).isEqualTo(5);
+        assertThat(Periods.minutes(10_000_000)).isEqualTo(Periods.MAX_MINUTES);
+        assertThat(Periods.minutes(180)).isEqualTo(180);
     }
 }

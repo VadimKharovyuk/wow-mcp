@@ -1,0 +1,28 @@
+/* Стили страницы дашборда. Тема: светлая/тёмная через prefers-color-scheme. */
+  :root { --bg:#f6f7f9; --card:#fff; --text:#1c2230; --muted:#6b7385; --line:#e3e6ec; --bot:#2f6fed; --player:#e8912d; --bad:#d6453d; --good:#2a9d5c; }
+  @media (prefers-color-scheme: dark) { :root { --bg:#12151c; --card:#1b2029; --text:#e6e9f0; --muted:#8c95a8; --line:#2a303c; --bot:#6b9bff; --player:#f3a84f; --bad:#ff6b63; --good:#4cc380; } }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--text); font:14px/1.45 system-ui, sans-serif; }
+  header { display:flex; flex-wrap:wrap; gap:12px; align-items:center; justify-content:space-between; padding:16px; }
+  h1 { font-size:18px; margin:0; }
+  select { background:var(--card); color:var(--text); border:1px solid var(--line); border-radius:8px; padding:6px 10px; }
+  main { padding:0 16px 24px; max-width:1200px; margin:0 auto; }
+  .cards { display:grid; grid-template-columns:repeat(auto-fit,minmax(160px,1fr)); gap:12px; margin-bottom:16px; }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:12px; padding:12px 14px; }
+  .card .v { font-size:24px; font-weight:600; }
+  .card .l { color:var(--muted); font-size:12px; }
+  .card .s { color:var(--muted); font-size:12px; margin-top:2px; }
+  .grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(340px,1fr)); gap:12px; margin-bottom:16px; }
+  .panel { background:var(--card); border:1px solid var(--line); border-radius:12px; padding:12px 14px; }
+  .panel h2 { font-size:14px; margin:0 0 8px; }
+  table { width:100%; border-collapse:collapse; font-size:13px; }
+  th, td { text-align:left; padding:5px 6px; border-bottom:1px solid var(--line); white-space:nowrap; }
+  th { color:var(--muted); font-weight:500; }
+  .wrap { overflow-x:auto; }
+  .muted { color:var(--muted); }
+  #err { color:var(--bad); padding:0 16px; }
+  .row { display:flex; flex-wrap:wrap; gap:8px; align-items:center; margin-bottom:8px; }
+  button { background:var(--card); color:var(--text); border:1px solid var(--line); border-radius:8px; padding:6px 12px; cursor:pointer; font:inherit; }
+  button:hover { border-color:var(--bot); } button:disabled { opacity:.5; cursor:default; }
+  .out { white-space:pre-wrap; word-break:break-word; background:var(--bg); border:1px solid var(--line); border-radius:8px; padding:10px; margin:0; max-height:520px; overflow:auto; font:13px/1.45 ui-monospace, Menlo, monospace; }
+  canvas { max-height:260px; }

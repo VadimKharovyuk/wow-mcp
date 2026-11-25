@@ -1,4 +1,6 @@
-package com.example.wowdashboard;
+package com.example.wowdashboard.stats;
+
+import com.example.wowdashboard.common.Periods;
 
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RequestMapping;

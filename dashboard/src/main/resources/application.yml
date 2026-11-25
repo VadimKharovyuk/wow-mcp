@@ -11,3 +11,14 @@ spring:
     hikari:
       read-only: true
       maximum-pool-size: 3
+
+# Разбор журнала бота моделью (Ollama должна быть запущена: ollama serve или приложение Ollama).
+# Модель выгружается из памяти сразу после ответа (keep_alive 0), анализ только по кнопке на странице.
+analyzer:
+  ollama-url: http://localhost:11434
+  model: qwen3.5:9b
+  # модели в выпадающем списке на странице; qwen3.5:9b точнее, но тяжелее (~8 ГБ памяти, выгружается сразу после ответа), qwen3:8b быстрее
+  models: qwen3.5:9b,qwen3:8b
+  num-ctx: 8192
+  timeout-seconds: 240
+  max-prompt-chars: 12000

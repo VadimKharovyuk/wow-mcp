@@ -41,3 +41,7 @@ logs/
 .env.*
 application-local.yml
 application-local.properties
+
+### Дашборд (pid и лог скрипта dashboard.sh) ###
+dashboard/.dashboard.pid
+dashboard/dashboard.log

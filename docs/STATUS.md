@@ -46,7 +46,7 @@
 - wow-mcp пишет в БД: `bot_job` (запуски задач со сводкой), `game_event` (jsonb: `loot` по LOOT_OPENED — бот и игрок,
   `lootmiss`, `death`, `sell`, `stat` — снимки опыта/уровня/денег), `mob_kill.job_uid`. Lua: `D[11]` счётчик окон добычи,
   `D[12]`/`D[13]` опыт.
-- `dashboard/` — отдельный Spring Boot (порт 8085, только чтение): API `/api/summary|timeline|progress|jobs|spots` и страница
+- `dashboard/` — отдельный Spring Boot (порт 8085, только чтение; запуск `./dashboard.sh open`; структура и правила — в `dashboard/README.md`): API `/api/summary|timeline|progress|jobs|spots`, сводка журнала `/api/digest` (JSON, экспорт), `/api/digest/text`, разбор моделью Ollama `POST /api/analyze` (qwen3:8b), и страница
   с графиками (Chart.js). SQL проверен на тестовых данных; на вашей базе и с реальными событиями не запускался.
 - Ограничение: данные вашей игры без бота пишутся, только пока работает сервер wow-mcp. Полная запись потребует отдельного
   сборщика (не сделано).

@@ -1,5 +1,6 @@
-package com.example.wowdashboard;
+package com.example.wowdashboard.stats;
 
+import com.example.wowdashboard.common.Periods;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Repository;
 
@@ -9,7 +10,7 @@ import java.util.Map;
 
 /** Запросы статистики. БД открыта только на чтение; таблицы создаёт wow-mcp. */
 @Repository
-class StatsRepository {
+public class StatsRepository {
 
     private final JdbcTemplate jdbc;
 
@@ -20,29 +21,44 @@ class StatsRepository {
     // ведущий пробел нужен: в текстовых блоках пробелы в конце строки отбрасываются ("AND" + "ts" склеились бы)
     private static final String SINCE_KILL = " killed_at >= now() - make_interval(hours => ?)";
     private static final String SINCE_EVENT = " ts >= now() - make_interval(hours => ?)";
+    // то же в минутах — для сводки журнала за точный период (30 минут не должны превращаться в «1 час»)
+    private static final String SINCE_KILL_M = " killed_at >= now() - make_interval(mins => ?)";
+    private static final String SINCE_EVENT_M = " ts >= now() - make_interval(mins => ?)";
 
     /** Сводка за период: убийства, добыча, смерти, продажи, опыт, деньги, время работы бота. */
-    Map<String, Object> summary(int hours) {
-        Map<String, Object> out = new LinkedHashMap<>();
+    public Map<String, Object> summary(int hours) {
+        Map<String, Object> out = summaryOf(SINCE_KILL, SINCE_EVENT, "make_interval(hours => ?)", hours);
         out.put("hours", hours);
-        out.put("kills", bySource("SELECT source, count(*) AS n FROM mob_kill WHERE " + SINCE_KILL + " GROUP BY source", hours));
+        return out;
+    }
+
+    /** Та же сводка за точный период в минутах (для разбора журнала). */
+    public Map<String, Object> summaryMinutes(int minutes) {
+        Map<String, Object> out = summaryOf(SINCE_KILL_M, SINCE_EVENT_M, "make_interval(mins => ?)", minutes);
+        out.put("minutes", minutes);
+        return out;
+    }
+
+    private Map<String, Object> summaryOf(String sinceKill, String sinceEvent, String jobInterval, int arg) {
+        Map<String, Object> out = new LinkedHashMap<>();
+        out.put("kills", bySource("SELECT source, count(*) AS n FROM mob_kill WHERE " + sinceKill + " GROUP BY source", arg));
         out.put("loot", bySource("SELECT coalesce(source,'?') AS source, count(*) AS n FROM game_event WHERE type='loot' AND "
-                + SINCE_EVENT + " GROUP BY source", hours));
+                + sinceEvent + " GROUP BY source", arg));
         out.put("lootMiss", bySource("SELECT coalesce(data->>'result', '?') AS source, count(*) AS n FROM game_event "
-                + "WHERE type='lootmiss' AND " + SINCE_EVENT + " GROUP BY 1", hours));
+                + "WHERE type='lootmiss' AND " + sinceEvent + " GROUP BY 1", arg));
         out.put("deaths", bySource("SELECT coalesce(source,'?') AS source, count(*) AS n FROM game_event WHERE type='death' AND "
-                + SINCE_EVENT + " GROUP BY source", hours));
+                + sinceEvent + " GROUP BY source", arg));
         Map<String, Object> sells = jdbc.queryForMap("""
                 SELECT count(*) AS sells, coalesce(sum((data->>'sold')::int), 0) AS items,
                        coalesce(sum((data->>'moneyDelta')::bigint), 0) AS money
-                FROM game_event WHERE type='sell' AND """ + SINCE_EVENT, hours);
+                FROM game_event WHERE type='sell' AND """ + sinceEvent, arg);
         out.put("sells", sells);
         out.put("botSeconds", jdbc.queryForObject("""
                 SELECT coalesce(sum(extract(epoch FROM (coalesce(ended_at, now()) - started_at))), 0)::bigint
                 FROM bot_job WHERE name IN ('grind','hunt','goRoute','go','sellAt','revive')
-                  AND coalesce(ended_at, now()) >= now() - make_interval(hours => ?)""", Long.class, hours));
-        out.put("xpGained", xpGained(hours));
-        out.put("moneyNet", moneyNet(hours));
+                  AND coalesce(ended_at, now()) >= now() - """ + jobInterval, Long.class, arg));
+        out.put("xpGained", xpGained(sinceEvent, arg));
+        out.put("moneyNet", moneyNet(sinceEvent, arg));
         return out;
     }
 
@@ -57,7 +73,7 @@ class StatsRepository {
     /**
      * Опыт за период по снимкам stat: при том же уровне — прирост, при повышении уровня — остаток до уровня + новый опыт.
      */
-    private long xpGained(int hours) {
+    private long xpGained(String sinceEvent, int hours) {
         Long v = jdbc.queryForObject("""
                 SELECT coalesce(sum(CASE
                          WHEN prev_level IS NULL THEN 0
@@ -68,15 +84,15 @@ class StatsRepository {
                              lag((data->>'level')::int) OVER w AS prev_level,
                              lag((data->>'xp')::bigint) OVER w AS prev_xp,
                              lag((data->>'xpMax')::bigint) OVER w AS prev_xpmax
-                      FROM game_event WHERE type='stat' AND """ + SINCE_EVENT + """
+                      FROM game_event WHERE type='stat' AND """ + sinceEvent + """
                       WINDOW w AS (ORDER BY ts)) t""", Long.class, hours);
         return v == null ? 0 : v;
     }
 
     /** Изменение денег за период (в меди): последний снимок минус первый. Траты на ремонт и покупки вычитаются. */
-    private long moneyNet(int hours) {
+    private long moneyNet(String sinceEvent, int hours) {
         List<Long> rows = jdbc.queryForList("""
-                SELECT (data->>'money')::bigint FROM game_event WHERE type='stat' AND """ + SINCE_EVENT + """
+                SELECT (data->>'money')::bigint FROM game_event WHERE type='stat' AND """ + sinceEvent + """
                 ORDER BY ts""", Long.class, hours);
         return rows.size() < 2 ? 0 : rows.get(rows.size() - 1) - rows.get(0);
     }
