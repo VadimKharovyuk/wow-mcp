@@ -45,13 +45,13 @@ Object.assign(bot, {
                  // Баффы держит ensureBuffs по таймеру (buffs ниже) — в ротации их нет (иначе жмутся при каждой готовности)
                  // приоритет боевых умений (после экстренных с условием по HP): 1 Молот праведника, 2 Правосудие света, 3 Щит мстителя
                  priority: [1363607377 /* Молот праведника */, 2037478445 /* Правосудие света */,
-                            { spell: 2008405423 /* Щит мстителя (3) */, minAttackers: 2 /* только когда бьют не меньше двух врагов */ }],
+                            { spell: 2008405423 /* Щит мстителя (3) */, minAttackers: 2 /* только когда бьют не меньше двух врагов */ },
+                            { spell: 1191036009 /* Освящение (9, id 20116/26573) */, minAttackers: 3 /* только когда бьют трое и больше */ }],
                  rotationSkip: [1764839983 /* Печать праведности (G) */, 1453980521 /* Печать повиновения (G) */, 516635130 /* Благословение королей */,
                                 2105405526 /* Очищение — не жать впустую в бою */, 1290206130 /* Аура воздаяния */,
                                 242961069 /* Благословение могущества */, 1433786557 /* Благословение мудрости */,
                                 904078709 /* Камень возвращения */,
                                 1791702616 /* Благословение неприкосновенности (Y, id 20911) */,
-                                1191036009 /* Освящение (клавиша 9, id 20116/26573) */,
                                 489876339 /* Праведное неистовство (T) */,
                                 980890529 /* Святая клятва (H) — держится по таймеру из buffs */],
                  healGuard: { 666458133: 0.60 /* Вспышка света (ранги) */, 326428551: 0.60 /* Вспышка света, другое написание */,
@@ -63,7 +63,7 @@ Object.assign(bot, {
                  buffs: [
         { key: 'G', name: 'Печать повиновения', everyMs: 20 * 60000, inFight: true, spell: 1453980521 },   // держится 30 мин; обновляем раз в 20 мин (запас на неудачное нажатие), в том числе в бою
         { key: 'T', name: 'Праведное неистовство', everyMs: 25 * 60000 },
-        { key: 'Y', name: 'Благословение неприкосновенности', everyMs: 9 * 60000 },
+        { key: 'Y', name: 'Благословение неприкосновенности', everyMs: 9 * 60000, inFight: true, spell: 1791702616 },   // держится 10 мин; обновляем раз в 9 мин, в том числе в бою
         { key: 'H', name: 'Святая клятва', everyMs: 60000, inFight: true, spell: 980890529 },   // раз в 60 с, в том числе в бою; лишнее нажатие просто обновляет
       ] },
     };
@@ -150,7 +150,7 @@ Object.assign(bot, {
   // turns — сколько раз можно довернуться на ~120° и повторить Tab: Tab берёт только врагов впереди, а атакующий может быть сзади.
   // Не нашли — возвращаемся к прежнему курсу.
   async switchToAttacker({ turns = 0 } = {}) {
-    this.lastSwitchTabs = 0; this.lastSwitchTurns = 0;
+    this.lastSwitchTabs = 0; this.lastSwitchTurns = 0; this.lastSwitchInfo = [];
     const f0 = this.state().facing;
     for (let t = 0; t <= turns && this.running; t++) {
       if (t > 0) { await this.turnTo(this.state().facing + 2.1, 2500, () => !this.running); this.lastSwitchTurns = t; }
@@ -158,6 +158,8 @@ Object.assign(bot, {
         const s = await this.tabTarget();
         this.lastSwitchTabs++;
         const p = this.pet();
+        // диагностика (в журнал): что показал каждый Tab — цель есть, враг, уровень, HP цели %, бьёт ли нас, дистанция, номер поворота
+        this.lastSwitchInfo.push({ r: t, tg: s.target ? 1 : 0, en: s.enemy ? 1 : 0, lvl: s.tLvl, hp: Math.round((s.targetHpPct || 0) * 100), tp: p && p.ttPlayer ? 1 : 0, d: s.tDist });
         if (s.target && s.enemy && s.targetHp > 0 && p && p.ttPlayer) return true;
       }
     }
@@ -190,7 +192,11 @@ Object.assign(bot, {
     const t0 = Date.now(), fightStart = t0;
     let feignAt = 0;
     let lastPress = 0, handledErr = 0, turns = 0, retreats = 0, lastRetreat = 0, deadSince = 0;
-    let noAttackSince = 0, hpAtNoAttack = 0, lastSwitch = 0, trapAt = 0, pullTries = 0, lastPull = 0, lastAutoAtk = 0, stepBacks = 0, lastAttackerTry = 0, lastFinish = 0, openerWaited = false, openerPressed = false, openerNoted = false, lastFastSwitch = 0, fastFails = 0;
+    let noAttackSince = 0, hpAtNoAttack = 0, lastSwitch = 0, trapAt = 0, pullTries = 0, lastPull = 0, lastAutoAtk = 0, stepBacks = 0, lastAttackerTry = 0, lastFinish = 0, openerWaited = false, openerPressed = false, openerNoted = false, lastFastSwitch = 0, skipLogAt = {}, faceEpisodes = 0, lastFaceAt = 0;
+    // вращение/поиск атакующего: только если мы не наносим урон и нас реально бьют; после неудачи — откат 8 → 15 → 30 с
+    let dealtAt = 0, prevTHp = null, searchFails = 0, nextSearchAt = 0;
+    const hpSamples = [];
+    const BACKOFF = [8000, 15000, 30000];
     // «нет прогресса»: цель недостижима (за колонной, на уступе, эвейд) — HP цели не меняется, нас никто не бьёт
     const npMs = (this.grindCfg && this.grindCfg.noProgressMs) || 8000;
     let progAt = Date.now(), progHp = null, progMyHp = null, progTHp = null, lastActiveAt = Date.now(), longNoted = false, lastInFightBuff = 0, closeSpent = 0, closeActive = false, closeD0 = 0, closeT0 = 0;
@@ -217,17 +223,31 @@ Object.assign(bot, {
         } else { this.release(); return { result: 'бой слишком долгий', ...s }; }
       }
 
+      // Учёт: когда последний раз падало HP цели (мы наносим урон) и сколько HP потеряли мы за последние ~4 с
+      const tnow = Date.now();
+      if (prevTHp != null && s.target && s.targetHp < prevTHp) dealtAt = tnow;
+      prevTHp = s.target ? s.targetHp : null;
+      hpSamples.push({ t: tnow, p: hpPct });
+      while (hpSamples.length && tnow - hpSamples[0].t > 4000) hpSamples.shift();
+      const lostHp = Math.max(...hpSamples.map(x => x.p)) - hpPct;
+      const canTurn = tnow - dealtAt > 3000 && lostHp >= 0.03;   // не бьём никого ≥ 3 с, а наше HP упало ≥ 3% — только тогда вертимся
+      if (s.attackers === 0) { searchFails = 0; nextSearchAt = 0; }   // бьют уже не нас — откат сбрасываем
+
       if (!s.target || !s.enemy || s.targetHp === 0) {
         // цель умерла/пропала, а бой идёт: берём того, кто бьёт нас (Tab до «целится в игрока»), а не случайного врага.
         // Не чаще раза в 1,5 с — без нападающих иначе каждый круг тратил бы до 4 Tab.
-        if (s.fight && Date.now() - lastAttackerTry > 1500) {
+        if (s.fight && Date.now() - lastAttackerTry > 1500 && Date.now() >= nextSearchAt) {
           lastAttackerTry = Date.now();
           const was = s.target ? (s.targetHp === 0 ? 'мёртвая' : 'не враг') : 'нет';
-          const ok = await this.switchToAttacker({ turns: s.attackers >= 1 ? 2 : 0 });
+          const ok = await this.switchToAttacker({ turns: s.attackers >= 1 && canTurn ? 2 : 0 });
+          if (ok) { searchFails = 0; nextSearchAt = 0; }
+          else if (s.attackers >= 1) { nextSearchAt = Date.now() + BACKOFF[Math.min(searchFails, BACKOFF.length - 1)]; searchFails++; }
           const n = this.lastSwitchTabs;
           this.warnings.push('переключился после смерти цели: ' + (ok ? 'на атакующего' : 'атакующего нет, взят ближайший')
               + ' (Tab ' + n + ', была цель: ' + was + ', HP ' + Math.round(hpPct * 100) + '%)');
           if (this.warnings.length > 20) this.warnings.shift();
+          this.log && this.log('info', 'fight', 'поиск атакующего после цели «' + was + '»: ' + (ok ? 'найден' : 'не найден'),
+              { found: ok, attackers: s.attackers, tabs: this.lastSwitchTabs, turns: this.lastSwitchTurns, hp: Math.round(hpPct * 100), canTurn, fails: searchFails, backoffMs: ok ? 0 : nextSearchAt - Date.now(), info: this.lastSwitchInfo });
           if (ok) this.fightMobs++;
           continue;
         }
@@ -250,16 +270,29 @@ Object.assign(bot, {
       // (атакующий вне экрана/дальний). Число врагов неизвестно (старый Lua) — работает прежнее правило ниже.
       {
         const pq = this.pet();
-        if (pq && s.fight && s.attackers >= 1 && s.target && s.enemy && s.targetHp > 0 && s.targetHpPct >= 0.99
-            && !pq.ttPlayer && !pq.ttPet && Date.now() - lastFastSwitch > 3000) {
+        // eligible — нас бьют (attackers >= 1) в бою; только тогда либо переключаемся, либо пишем причину отказа
+        const eligible = !!pq && s.fight && s.attackers >= 1;
+        const why = !eligible ? null
+            : !s.target ? 'нет цели' : !s.enemy ? 'цель не враг' : !(s.targetHp > 0) ? 'цель мертва'
+            : !(s.targetHpPct >= 0.99) ? 'цель тронута (' + Math.round((s.targetHpPct || 0) * 100) + '%)'
+            : pq.ttPlayer ? 'цель бьёт игрока' : pq.ttPet ? 'цель бьёт питомца'
+            : Date.now() < nextSearchAt ? 'откат после неудачного поиска (' + Math.round((nextSearchAt - Date.now()) / 1000) + ' с)'
+            : Date.now() - lastFastSwitch <= 3000 ? 'пауза после поиска' : null;
+        // диагностика: нас бьют, а быстрое переключение не сработало — пишем причину (раз в 6 с на причину)
+        if (why && Date.now() - (skipLogAt[why] || 0) > 6000) {
+          skipLogAt[why] = Date.now();
+          this.log && this.log('info', 'fight', 'быстрое переключение пропущено: ' + why,
+              { attackers: s.attackers, tDist: s.tDist, tLvl: s.tLvl, hp: Math.round(hpPct * 100), ttPlayer: pq && pq.ttPlayer ? 1 : 0, tHpPct: Math.round((s.targetHpPct || 0) * 100) });
+        }
+        if (eligible && !why) {
           lastFastSwitch = Date.now();
           const tDist = s.tDist, att = s.attackers;
-          const ok = await this.switchToAttacker({ turns: 2 });
-          fastFails = ok ? 0 : fastFails + 1;
-          if (!ok) lastFastSwitch = Date.now() + (fastFails >= 3 ? 17000 : 3000);   // не нашли: пауза 6 с, после 3 неудач подряд — 20 с
+          const ok = await this.switchToAttacker({ turns: canTurn ? 2 : 0 });
+          if (ok) { searchFails = 0; nextSearchAt = 0; }
+          else { nextSearchAt = Date.now() + BACKOFF[Math.min(searchFails, BACKOFF.length - 1)]; searchFails++; }   // не нашли: откат 8 → 15 → 30 с
           if (ok) this.fightMobs++;
           this.log('info', 'fight', 'быстрое переключение: ' + (ok ? 'взят атакующий' : 'атакующего не нашёл'),
-              { attackers: att, tDist, tabs: this.lastSwitchTabs, turns: this.lastSwitchTurns, found: ok, hp: Math.round(hpPct * 100) });
+              { attackers: att, tDist, tabs: this.lastSwitchTabs, turns: this.lastSwitchTurns, found: ok, hp: Math.round(hpPct * 100), canTurn, fails: searchFails, backoffMs: ok ? 0 : nextSearchAt - Date.now(), info: this.lastSwitchInfo });
           continue;
         }
       }
@@ -413,6 +446,21 @@ Object.assign(bot, {
         }
       }
 
+      // Цель выбрана и бьёт нас, но её полосы нет на экране — она сзади или сбоку (Tab, скрытая цель, моб обошёл): доворачиваемся по
+      // кругу шагами ~90°, пока полоса не появится, и наводимся на неё. Не больше 3 заходов за бой, не чаще раза в 4 с.
+      if (s.fight && s.target && s.enemy && s.targetHp > 0 && !casting && faceEpisodes < 3 && now - lastFaceAt > 4000 && canTurn && this.targetOffscreen()) {
+        lastFaceAt = now; faceEpisodes++;
+        let steps = 0, found = false;
+        for (; steps < 3 && this.running; steps++) {
+          await this.turnTo(this.state().facing + 1.57, 1500, () => !this.running);
+          await sleep(250);                                   // полосы обновляются раз в 0.1 с
+          if (!this.targetOffscreen()) { found = true; steps++; break; }
+        }
+        if (found) { const pl = this.plateAim && this.plateAim(); if (pl && Math.abs(pl.fx - 0.5) > 0.08 && this.aimBy) await this.aimBy(pl.fx, () => !this.running); }
+        this.log && this.log('info', 'fight', 'доворот к цели, которая вне экрана: ' + (found ? 'нашёл' : 'не нашёл'), { steps, found, attackers: s.attackers, tDist: s.tDist, hp: Math.round(hpPct * 100), episode: faceEpisodes });
+        continue;
+      }
+
       // Баффы с inFight (паладин: Святая клятва): интервал вышел — обновляем и в бою. Не во время каста, не чаще раза в 3 с.
       if (cc && cc.buffs && s.fight && now - lastInFightBuff > 3000) {
         this.buffAt = this.buffAt || {};
@@ -431,7 +479,7 @@ Object.assign(bot, {
 
       // Сближение: ближний профиль (cc.closeInSpell — умение ближнего боя на панели), бой идёт, а цель вне его дальности —
       // моб бьёт издалека (кастер, лучник). Доворачиваемся к цели и подбегаем короткими кусками; не больше 10 с за бой.
-      if (cc && cc.closeInSpell && s.fight && s.target && s.enemy && s.targetHp > 0 && closeSpent < 10000
+      if (cc && cc.closeInSpell && s.fight && s.target && s.enemy && s.targetHp > 0 && closeSpent < 10000 && !this.targetOffscreen()
           && now - this.lastHealCastAt() > HEAL_CAST_LOCK_MS) {
         const rng = this.spellInRange(cc.closeInSpell);
         if (rng === 0) {

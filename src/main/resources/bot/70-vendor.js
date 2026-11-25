@@ -36,10 +36,18 @@ Object.assign(bot, {
     if (!cc || !cc.mountKey || this.qaddr == null) return false;
     const s = this.state();
     if (this.mounted() || s.fight || s.dead || s.ghost || this.casting()) return this.mounted();
+    // Призыв идёт ~1,5 с, и любое движение (W) его прерывает — поэтому не отпускаем управление, пока конь не появился:
+    // ждём по факту (mounted), а не только по флагу каста (он может запаздывать), и не меньше 2 с с нажатия.
+    // Клавишу жмём ОДИН раз: повторное нажатие на коне — это спешивание.
+    const stopped = () => !this.running && this.job.status !== 'running';
+    const t0 = Date.now();
     await this.tap(cc.mountKey);
     await sleep(600);
-    await this.waitFor(() => !this.casting(), 6000, 250, () => !this.running && this.job.status !== 'running');
-    await sleep(500);
+    await this.waitFor(() => !this.casting(), 6000, 250, stopped);
+    await this.waitFor(() => this.mounted(), Math.max(0, 3500 - (Date.now() - t0)), 150, stopped);
+    const rest = 2000 - (Date.now() - t0);
+    if (rest > 0) await sleep(rest);
+    await sleep(300);
     if (!this.mounted()) { this.warnings.push('не удалось сесть на коня'); if (this.warnings.length > 20) this.warnings.shift(); }
     return this.mounted();
   },

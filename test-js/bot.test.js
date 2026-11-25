@@ -301,14 +301,15 @@ test('activeRotation: экстренные (с условием по HP) выш�
     { spell: 2037478445, learned: true },    // Правосудие света (в priority)
   ];
   const order = b.activeRotation().map(r => r.spell);
-  assert.deepEqual(order, [1672233375, 1363607377, 2037478445, 2008405423, 1568831975]);
+  assert.deepEqual(order, [1672233375, 1363607377, 2037478445, 2008405423, 1191036009, 1568831975]);
 });
 
 test('combatCfg паладина: лишние умения (Очищение, Аура воздаяния, Камень возвращения) в rotationSkip', () => {
   const b = fresh(); b.profile = 'paladin';
   const cc = b.combatCfg();
   for (const h of [2105405526, 1290206130, 242961069, 1433786557, 904078709]) assert.ok(cc.rotationSkip.includes(h), String(h));
-  assert.deepEqual(plain(cc.priority), [1363607377, 2037478445, { spell: 2008405423, minAttackers: 2 }]);
+  assert.deepEqual(plain(cc.priority), [1363607377, 2037478445, { spell: 2008405423, minAttackers: 2 }, { spell: 1191036009, minAttackers: 3 }]);
+  assert.equal(cc.rotationSkip.includes(1191036009), false);   // Освящение управляется правилом priority, не пропускается
 });
 
 test('activeRotation: у профиля без priority — как есть', () => {
@@ -758,4 +759,182 @@ test('switchToAttacker: без turns поворотов нет (как рань�
   assert.equal(await b.switchToAttacker(), false);
   assert.equal(turns, 0);
   assert.equal(b.lastSwitchTabs, 4);
+});
+
+// --- посадка на коня: ждём конец призыва, не идём раньше времени ---
+function mountSetup({ mountAfterMs = 1500, never = false } = {}) {
+  const b = fresh();
+  b.combatCfg = () => ({ mountKey: 'L' });
+  b.qaddr = 1;
+  b.job = { status: 'running' };
+  b.running = true;
+  let t0 = 0; const taps = [];
+  b.state = () => ({ fight: false, dead: false, ghost: false });
+  b.tap = async k => { taps.push(k); if (!t0) t0 = Date.now(); };
+  b.casting = () => false;                                     // флаг каста запаздывает/не виден
+  b.mounted = () => !never && t0 > 0 && Date.now() - t0 >= mountAfterMs;
+  return { b, taps, started: () => t0 };
+}
+
+test('mountUp: флаг каста не виден — всё равно ждёт коня и не возвращается раньше 2 с', async () => {
+  const { b, taps, started } = mountSetup({ mountAfterMs: 1500 });
+  const r = await b.mountUp();
+  const dt = Date.now() - started();
+  assert.equal(r, true);
+  assert.equal(taps.length, 1);
+  assert.ok(dt >= 2000, 'прошло ' + dt);
+});
+
+test('mountUp: конь не появился — клавиша жмётся один раз (повтор на коне = спешивание), затем false', async () => {
+  const { b, taps } = mountSetup({ never: true });
+  const r = await b.mountUp();
+  assert.equal(r, false);
+  assert.equal(taps.length, 1);
+});
+
+// --- диагностика: поиск атакующего и перебежка ---
+test('switchToAttacker: пишет по каждому Tab запись для журнала', async () => {
+  const b = fresh(); b.running = true;
+  b.state = () => ({ facing: 0, target: true, enemy: true, tLvl: 70, targetHpPct: 1, targetHp: 5, tDist: 1 });
+  b.tabTarget = async () => b.state();
+  b.pet = () => ({ ttPlayer: false });
+  await b.switchToAttacker();
+  assert.equal(b.lastSwitchInfo.length, 4);
+  assert.deepEqual(plain(b.lastSwitchInfo[0]), { r: 0, tg: 1, en: 1, lvl: 70, hp: 100, tp: 0, d: 1 });
+});
+
+test('fight: быстрое переключение не сработало — в журнал пишется причина (цель бьёт игрока)', async () => {
+  const b = noProgSetup({ fight: true, attackers: 2 });
+  b.pet = () => ({ exists: false, ttPlayer: true, ttPet: false });
+  setTimeout(() => { b.running = false; }, 300);
+  await b.fight({ timeout: 5000 });
+  const rec = b.logs.find(l => String(l[2]).startsWith('быстрое переключение пропущено'));
+  assert.ok(rec && String(rec[2]).includes('цель бьёт игрока'));
+  assert.equal(rec[3].attackers, 2);
+});
+
+test('travelTo: журнал перебежки верхом (сел, результат, слез)', async () => {
+  const { b } = travelSetup();
+  await b.travelTo(15, 10, {}, {});
+  const rec = b.logs.find(l => l[1] === 'travel');
+  assert.ok(rec, 'запись travel');
+  assert.equal(rec[3].mountOk, true);
+  assert.equal(rec[3].result, 'дошёл');
+  assert.equal(rec[3].dismounted, true);
+});
+
+test('combatCfg паладина: Благословение неприкосновенности (Y) раз в 9 минут, в том числе в бою', () => {
+  const b = fresh(); b.profile = 'paladin';
+  const y = b.combatCfg().buffs.find(x => x.key === 'Y');
+  assert.equal(y.everyMs, 9 * 60000);
+  assert.equal(y.inFight, true);
+  assert.equal(y.spell, 1791702616);
+});
+
+// --- /target по имени: далёких мобов не берём ---
+function byNameSetup(tDist, cfg = {}) {
+  const b = fresh();
+  const chats = [];
+  b.__win.chat = async c => { chats.push(c); };
+  b.grinding = true;
+  b.grindCfg = { names: ['Червь'], minLvlDiff: -10, maxLvlDiff: 10, ...cfg };
+  b.grindStats = {};
+  b.waitFrames = async () => {};
+  b.state = () => ({ fight: false, target: true, targetHp: 100, enemy: true, tFlags: 0, tLvl: 70, tDist, x: 1, y: 1 });
+  b.goodPullTarget = () => true;
+  return { b, chats };
+}
+
+test('findByName: цель дальше 28 ярдов — снимаем, имя на паузу, не берём', async () => {
+  const { b, chats } = byNameSetup(0);
+  const r = await b.findByName();
+  assert.equal(r, null);
+  assert.ok(chats.includes('/cleartarget'));
+  assert.ok(b.nameCool['Червь'] > Date.now());
+  assert.equal(b.grindStats.byNameTooFar, 1);
+});
+
+test('findByName: цель ближе 28 ярдов — берём; nameFarOk возвращает прежнее поведение для далёких', async () => {
+  const near = byNameSetup(1);
+  assert.ok(await near.b.findByName());
+  const far = byNameSetup(0, { nameFarOk: true });
+  const r = await far.b.findByName();
+  assert.ok(r);
+  assert.equal(far.b.farName, 'Червь');
+});
+
+// --- цель сзади: доворот, пока её полоса не появится ---
+test('targetOffscreen: нет таблицы полос — false; цель выбрана, полосы нет — true; полоса на экране — false', () => {
+  const b = fresh();
+  assert.equal(b.targetOffscreen(), false);
+  b.paddr = 0; b.pstride = 1;
+  const H = new Float64Array(60); b.mem = () => H;
+  H[4] = 1;                      // P[5] = 1: цель есть
+  H[3] = 0;                      // P[4] = 0 полос
+  assert.equal(b.targetOffscreen(), true);
+  H[3] = 1; H[5] = 0.5; H[6] = 0.5; H[7] = 1; H[8] = 70; H[9] = 123;   // одна полоса цели по центру
+  assert.equal(b.targetOffscreen(), false);
+});
+
+test('fight: цель сзади (полосы нет) — доворачивается по 90°, пока полоса не появится', async () => {
+  const b = noProgSetup({ fight: true, attackers: 1, dyn: t => ({ hp: Math.max(60, 100 - 2 * t) }) });   // наше HP падает — вертеться можно
+  b.pet = () => ({ exists: false, ttPlayer: true, ttPet: false });   // цель бьёт нас — быстрого переключения нет
+  let calls = 0;
+  b.targetOffscreen = () => ++calls < 4;                              // 1-й вход и два шага — вне экрана, затем появилась
+  const turns = [];
+  b.turnTo = async a => { turns.push(+a.toFixed(2)); };
+  b.plateAim = () => null;
+  setTimeout(() => { b.running = false; }, 2200);
+  await b.fight({ timeout: 5000 });
+  assert.ok(turns.length >= 2, 'повороты: ' + turns.length);
+  const rec = b.logs.find(l => String(l[2]).startsWith('доворот к цели'));
+  assert.ok(rec && rec[3].found === true);
+});
+
+// --- вращение только если не наносим урон и нас реально бьют; откат после неудачного поиска ---
+test('fight: HP не падает (медленная потеря/ничего) — поиск атакующего без поворотов; неудача — откат 8 с', async () => {
+  const b = noProgSetup({ fight: true, attackers: 1 });
+  b.pet = () => ({ exists: false, ttPlayer: false, ttPet: false });
+  const args = [];
+  b.switchToAttacker = async o => { args.push(o && o.turns); b.lastSwitchTabs = 4; return false; };
+  setTimeout(() => { b.running = false; }, 1200);
+  await b.fight({ timeout: 5000 });
+  assert.deepEqual(args, [0]);                                   // один поиск без поворотов; повтор — только после отката
+  const rec = b.logs.find(l => String(l[2]).startsWith('быстрое переключение: атакующего не нашёл'));
+  assert.ok(rec && rec[3].canTurn === false);
+  assert.ok(rec[3].backoffMs > 7000 && rec[3].backoffMs <= 8000, 'откат ' + rec[3].backoffMs);
+  const skip = b.logs.find(l => String(l[2]).includes('откат после неудачного поиска'));
+  assert.ok(skip, 'причина пропуска — откат');
+});
+
+test('fight: наше HP падает ≥3% и цель не получает урона — поиск с поворотами', async () => {
+  const b = noProgSetup({ fight: true, dyn: t => ({ attackers: t >= 12 ? 1 : 0, hp: Math.max(60, 100 - 3 * t) }) });
+  b.pet = () => ({ exists: false, ttPlayer: false, ttPet: false });
+  const args = [];
+  b.switchToAttacker = async o => { args.push(o && o.turns); b.running = false; return false; };
+  await b.fight({ timeout: 5000 });
+  assert.deepEqual(args, [2]);
+});
+
+// --- Lua: глобальные имена не должны затирать друг друга (таблица P затирала функцию P() и ломала цепочку W) ---
+test('Lua: имена глобальных таблиц модулей не совпадают с функциями lua-setup и друг с другом', () => {
+  const fs = require('fs'), path = require('path');
+  const root = path.join(__dirname, '..', 'src', 'main', 'resources');
+  const setup = fs.readFileSync(path.join(root, 'lua-setup.txt'), 'utf8');
+  const funcs = new Set([...setup.matchAll(/function\s+([A-Za-z_][A-Za-z_0-9]*)\s*\(/g)].map(m => m[1]));
+  const tables = [];
+  for (const m of setup.matchAll(/\/run\s+([A-Za-z_][A-Za-z_0-9]*)\s*=\s*\{/g)) tables.push(['lua-setup.txt', m[1]]);
+  const mods = fs.readFileSync(path.join(root, 'lua', 'manifest.txt'), 'utf8').split('\n').map(l => l.trim()).filter(l => l && !l.startsWith('#'));
+  for (const f of mods) {
+    const src = fs.readFileSync(path.join(root, 'lua', f), 'utf8');
+    for (const m of src.matchAll(/^([A-Za-z_][A-Za-z_0-9]*)\s*=\s*\{/gm)) tables.push([f, m[1]]);
+    for (const m of src.matchAll(/^function\s+([A-Za-z_][A-Za-z_0-9]*)\s*\(/gm)) funcs.add(m[1]);
+  }
+  const seen = new Map();
+  for (const [f, name] of tables) {
+    assert.equal(funcs.has(name), false, `таблица ${name} (${f}) затирает функцию с тем же именем`);
+    assert.equal(seen.has(name), false, `таблица ${name} объявлена дважды: ${seen.get(name)} и ${f}`);
+    seen.set(name, f);
+  }
+  assert.ok(tables.length >= 6);
 });

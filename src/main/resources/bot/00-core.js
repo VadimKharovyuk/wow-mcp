@@ -133,6 +133,13 @@ window.bot = {
     return { combat: this.aaddr == null ? null : H[this.aaddr + 4 * this.astride] | 0,
              plates: this.paddr == null ? null : H[this.paddr + 45 * this.pstride] | 0 };
   },
+  // Цель выбрана, но её полосы нет на экране (она сзади или сбоку): true. Нет данных полос (старый Lua) или цели — false.
+  // Без побочной статистики plateAim (можно звать в цикле).
+  targetOffscreen() {
+    if (this.paddr == null || this.plateHasTarget() !== true) return false;
+    const t = (this.plates() || []).find(x => x.target);
+    return !(t && t.fx > 0.02 && t.fx < 0.98);
+  },
   // Полоса выбранной цели на экране (доля ширины fx) или null — тогда ищем курсором, как раньше.
   plateAim() {
     const p = this.plates();

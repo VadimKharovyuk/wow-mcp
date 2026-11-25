@@ -97,9 +97,16 @@ Object.assign(bot, {
       await this.waitFrames(2);
       const s = this.state();
       if (this.goodPullTarget(s)) {
-        // /target имя берёт моба и за 40+ ярдов, и за спиной: далёкого (>28 ярдов, tDist & 1 == 0) тоже берём —
-        // approach() подбежит; не дошли — имя на паузу (см. approach)
+        // /target имя берёт моба и за 40+ ярдов, и за спиной. Далёких (>28 ярдов, tDist & 1 == 0) по умолчанию не берём —
+        // бот убегал за мобами очень далеко: цель снимаем, имя на паузу 15 с. grindCfg.nameFarOk = true вернёт прежнее поведение
+        // (тогда approach() подбежит; не дошли — имя на паузу, см. approach)
         const far = !(s.tDist & 1);
+        if (far && !this.grindCfg.nameFarOk) {
+          if (this.grindStats) this.grindStats.byNameTooFar = (this.grindStats.byNameTooFar || 0) + 1;
+          this.nameCool[nm] = Date.now() + 15000;
+          await chat('/cleartarget');
+          continue;
+        }
         if (this.grindStats) {
           this.grindStats.byName = (this.grindStats.byName || 0) + 1;
           if (far) this.grindStats.byNameFar = (this.grindStats.byNameFar || 0) + 1;
@@ -213,11 +220,23 @@ Object.assign(bot, {
   // нашлась цель: бой и подход начинаются пешком. Выключить: mountTravel: false.
   async travelTo(x, y, o, cfg) {
     const s = this.state();
-    if (cfg && cfg.mountTravel !== false && !s.fight && Math.hypot(s.x - x, s.y - y) > ((cfg && cfg.mountMinDist) || 0.6)) {
+    const dist = Math.hypot(s.x - x, s.y - y);
+    let tried = false, mountOk = null, res = null;
+    const t0 = Date.now();
+    if (cfg && cfg.mountTravel !== false && !s.fight && dist > ((cfg && cfg.mountMinDist) || 0.6)) {
+      tried = true;
       try { await this.mountUp(); } catch (e) { /* не вышло сесть — бежим пешком */ }
+      mountOk = !!(this.mounted && this.mounted());
     }
-    try { return await this.moveTo(x, y, o); }
-    finally { if (this.mounted && this.mounted()) await this.dismount(); }
+    const rideT0 = Date.now();
+    try { res = await this.moveTo(x, y, o); return res; }
+    finally {
+      const stillMounted = !!(this.mounted && this.mounted());
+      if (stillMounted) await this.dismount();
+      // диагностика перебежки верхом: сел ли, чем кончился бег, сколько ехали, слезали ли
+      if (tried && this.log) this.log('info', 'travel', 'перебежка верхом: ' + (mountOk ? 'сел' : 'не сел') + ', бег: ' + (res && res.result || 'ошибка'),
+          { dist: +dist.toFixed(2), mountOk, result: res && res.result || null, mountMs: rideT0 - t0, rideMs: Date.now() - rideT0, dismounted: stillMounted });
+    }
   },
 
   // Баффы профиля (cc.buffs): вне боя, не во время каста, с маной. Время последнего нажатия — this.buffAt[key];

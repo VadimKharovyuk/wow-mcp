@@ -82,7 +82,7 @@ Object.assign(bot, {
           const st = this.state(), cc = this.combatCfg && this.combatCfg();
           // стрелок: цель в дальности выстрела; ближник: подходящая цель ближе ~28 ярдов (дальше approach ненадёжен)
           const good = this.goodPullTarget(st, { needRange: true });
-          if (good && ((cc && cc.ranged) || (st.tDist & 1))) {
+          if (good && ((cc && cc.ranged) || (st.tDist & (this.mounted && this.mounted() ? 2 : 1)))) {   // верхом едем, пока моб не ближе ~11 ярдов
             if (this.grindStats) this.grindStats.runFound = (this.grindStats.runFound || 0) + 1;
             this.log && this.log('info', 'approach', 'цель найдена на бегу', { onRun: true, tDist: st.tDist, tLvl: st.tLvl });
             return done('цель');
