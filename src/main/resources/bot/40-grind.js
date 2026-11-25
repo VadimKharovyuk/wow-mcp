@@ -34,11 +34,30 @@ Object.assign(bot, {
     st.rejects = st.rejects || {}; st.rejects[reason] = (st.rejects[reason] || 0) + 1;
   },
 
+  // Недостижимые цели (результат fight «цель недостижима»): бан на 60 с по месту игрока (±0.15) и имени цели (хеш из полос;
+  // нет полос — по уровню). Живёт в памяти бота.
+  banTarget(s) {
+    const t = (this.plates && this.plates() || []).find(p => p.target);
+    const list = this.unreachable = (this.unreachable || []).filter(b => b.until > Date.now());
+    list.push({ hash: t ? t.nameHash : null, lvl: s.tLvl, x: s.x, y: s.y, until: Date.now() + 60000 });
+    if (list.length > 30) list.shift();
+    return list[list.length - 1];
+  },
+  isBannedTarget(s) {
+    const list = this.unreachable;
+    if (!list || !list.length || !s) return false;
+    const now = Date.now();
+    const t = (this.plates && this.plates() || []).find(p => p.target);
+    return list.some(b => b.until > now && Math.hypot(b.x - s.x, b.y - s.y) < 0.15
+        && (b.hash != null && t ? b.hash === t.nameHash : b.lvl === s.tLvl));
+  },
+
   // null — цель подходит; иначе причина отказа (видна в get_state → grind.rejects):
   // мёртв / нейтральный / игрок / элита/редкий / занят / уровень / не зверь (+ вне радиуса, далеко для выстрела)
   targetProblem(s) {
     if (!s.target) return 'нет цели';
     if (s.targetHp === 0) return 'мёртв';
+    if (this.isBannedTarget(s)) return 'недостижима';
     if (!s.enemy) return 'нейтральный';
     if (s.tFlags & 1) return 'игрок';
     if (s.tFlags & 2) return 'элита/редкий';
@@ -504,6 +523,14 @@ Object.assign(bot, {
     if (this.dead() || f.hp === 0 || f.result === 'персонаж погиб') return null;
     if (f.result === 'притворился мёртвым') return null;    // спасся: гринд отдохнёт (HP низкое) и продолжит   // погибли: гринд-цикл увидит смерть на следующем шаге
     if (!this.grinding) return 'остановлен вручную';
+    if (f.result === 'цель недостижима') {
+      // не стоим перед недостижимой целью: бан на 60 с, цель снимаем, охота идёт дальше
+      const b = this.banTarget(f);
+      st.unreachable = (st.unreachable || 0) + 1;
+      if (this.log) this.log('warn', 'fight', 'цель недостижима — бан 60 с', { waitedMs: f.waitedMs, err: f.err, errTime: f.errTime, tDist: f.tDist, tLvl: f.tLvl, nameHash: b.hash, targetHpPct: f.targetHpPct, total: st.unreachable });
+      await chat('/cleartarget');
+      return null;
+    }
     if (f.result !== 'бой окончен') return 'бой: ' + f.result;
     st.kills++;
     if (this.grindCfg.loot) {

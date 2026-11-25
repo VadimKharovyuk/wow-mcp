@@ -308,7 +308,7 @@ test('combatCfg паладина: лишние умения (Очищение, �
   const b = fresh(); b.profile = 'paladin';
   const cc = b.combatCfg();
   for (const h of [2105405526, 1290206130, 242961069, 1433786557, 904078709]) assert.ok(cc.rotationSkip.includes(h), String(h));
-  assert.deepEqual(plain(cc.priority), [1363607377, 2037478445, { spell: 2008405423, minAttackers: 3 }]);
+  assert.deepEqual(plain(cc.priority), [1363607377, 2037478445, { spell: 2008405423, minAttackers: 2 }]);
 });
 
 test('activeRotation: у профиля без priority — как есть', () => {
@@ -329,10 +329,10 @@ test('attackers: читает A[4] из памяти; нет таблицы — 
 test('attackersOk: без условия — да; неизвестное число врагов — нет; порог «больше двух»', () => {
   const b = fresh();
   assert.equal(b.attackersOk({ spell: 1 }), true);
-  assert.equal(b.attackersOk({ spell: 1, minAttackers: 3 }), false);          // таблицы нет — не жмём
+  assert.equal(b.attackersOk({ spell: 1, minAttackers: 2 }), false);          // таблицы нет — не жмём
   const H = new Float64Array(20); b.mem = () => H; b.aaddr = 0; b.astride = 1;
-  H[3] = 2; assert.equal(b.attackersOk({ minAttackers: 3 }), false);          // двое — мало
-  H[3] = 3; assert.equal(b.attackersOk({ minAttackers: 3 }), true);           // трое — можно
+  H[3] = 1; assert.equal(b.attackersOk({ minAttackers: 2 }), false);          // один — мало
+  H[3] = 2; assert.equal(b.attackersOk({ minAttackers: 2 }), true);           // двое — можно
 });
 
 test('priority: правило с minAttackers сохраняется объектом и не дублируется из ротации', () => {
@@ -341,7 +341,7 @@ test('priority: правило с minAttackers сохраняется объек
   const rot = plain(b.activeRotation());
   const shield = rot.filter(r => r.spell === 2008405423);
   assert.equal(shield.length, 1);
-  assert.equal(shield[0].minAttackers, 3);
+  assert.equal(shield[0].minAttackers, 2);
 });
 
 // ---------- полосы здоровья врагов (lua/plates.lua) ----------
@@ -549,4 +549,213 @@ test('avoidStuck: уходит в сторону от точки, не боль�
 test('avoidStuck: нет точек — ничего не делает', async () => {
   const b = fresh();
   assert.equal(await b.avoidStuck({ zone: 1, x: 50, y: 50, facing: 0 }, { n: 0 }), false);
+});
+
+// --- «нет прогресса»: недостижимая цель ---
+function noProgSetup(over = {}) {
+  const b = fresh();
+  b.grindCfg = { noProgressMs: 300 };
+  let t = 0;
+  b.state = () => ({ hp: 100, hpMax: 100, fight: false, target: true, enemy: true, targetHp: 500, targetHpMax: 500, targetHpPct: 1,
+    attackers: 0, tDist: 1, tLvl: 60, ready: 0, manaPct: 1, x: 10, y: 10, zone: 1, ...over, ...(over.dyn ? over.dyn(t++) : {}) });
+  b.dead = () => false;
+  b.pet = () => ({ exists: false, ttPlayer: false, ttPet: false });
+  b.release = () => { b.running = false; };
+  b.pressSpell = async () => true;
+  b.tap = async () => {};
+  b.key = () => {};
+  return b;
+}
+
+test('fight: HP цели не меняется, нас не бьют — «цель недостижима» (боя даже не было)', async () => {
+  const b = noProgSetup();
+  const r = await b.fight({ timeout: 5000 });
+  assert.equal(r.result, 'цель недостижима');
+});
+
+test('fight: HP цели меняется — нет отказа', async () => {
+  const b = noProgSetup({ dyn: t => ({ targetHp: 500 - t }) });
+  setTimeout(() => { b.running = false; }, 700);
+  const r = await b.fight({ timeout: 5000 });
+  assert.notEqual(r.result, 'цель недостижима');
+});
+
+test('fight: нас бьют (attackers>=1) — нет отказа', async () => {
+  const b = noProgSetup({ attackers: 1, fight: true });
+  b.switchToAttacker = async () => false;
+  setTimeout(() => { b.running = false; }, 700);
+  const r = await b.fight({ timeout: 5000 });
+  assert.notEqual(r.result, 'цель недостижима');
+});
+
+test('banTarget/targetProblem: бан по месту и уровню; другое место и истёкший бан — не бан', () => {
+  const b = fresh();
+  b.grindCfg = { minLvlDiff: -10, maxLvlDiff: 10 };
+  b.banTarget({ x: 10, y: 10, tLvl: 60 });
+  const s = { target: true, targetHp: 1, enemy: true, tFlags: 0, tLvl: 60, x: 10.05, y: 10 };
+  assert.equal(b.targetProblem(s), 'недостижима');
+  assert.notEqual(b.targetProblem({ ...s, x: 30 }), 'недостижима');
+  assert.notEqual(b.targetProblem({ ...s, tLvl: 59 }), 'недостижима');
+  b.unreachable[0].until = Date.now() - 1;
+  assert.notEqual(b.targetProblem(s), 'недостижима');
+});
+
+test('fightAndLoot: «цель недостижима» — бан, гринд не останавливается', async () => {
+  const b = fresh();
+  b.__win.chat = async () => {};
+  b.grinding = true;
+  b.grindCfg = {};
+  b.dead = () => false;
+  b.fight = async () => ({ result: 'цель недостижима', waitedMs: 8000, x: 10, y: 10, tLvl: 60, hp: 100 });
+  const st = { kills: 0 };
+  const r = await b.fightAndLoot(st);
+  assert.equal(r, null);
+  assert.equal(st.unreachable, 1);
+  assert.equal(st.kills, 0);
+  assert.equal(b.unreachable.length, 1);
+});
+
+// --- мягкий таймаут боя ---
+test('fight: таймаут при наличии прогресса — бой продолжается; без прогресса или за пределом — «бой слишком долгий»', async () => {
+  // прогресс есть (нас бьют): после timeout бой идёт, пока не вышли за hardTimeout
+  const b = noProgSetup({ attackers: 1, fight: true });
+  b.switchToAttacker = async () => false;
+  const r = await b.fight({ timeout: 200, hardTimeout: 700 });
+  assert.equal(r.result, 'бой слишком долгий');
+  assert.ok(b.logs.some(l => String(l[2]).startsWith('долгий бой')), 'запись «продолжаю»');
+  // без прогресса (нас не бьют, HP цели стоит): сработает «цель недостижима» раньше, а при отключённом ей — таймаут
+  const b2 = noProgSetup({ fight: true });
+  b2.grindCfg = { noProgressMs: 60000, activeWindowMs: 100 };
+  const t0 = Date.now();
+  const r2 = await b2.fight({ timeout: 300, hardTimeout: 5000 });
+  assert.equal(r2.result, 'бой слишком долгий');
+  assert.ok(Date.now() - t0 < 2500);
+});
+
+// --- сближение с целью, бьющей издалека ---
+function closeSetup(ranges) {
+  const b = noProgSetup({ fight: true, attackers: 1 });
+  b.combatCfg = () => ({ closeInSpell: 111 });
+  b.switchToAttacker = async () => false;
+  let i = 0;
+  b.spellInRange = () => ranges[Math.min(i++, ranges.length - 1)];
+  const held = [];
+  b.hold = async (k, ms) => { held.push(k); };
+  b.lastHealCastAt = () => 0;
+  return { b, held };
+}
+
+test('fight: цель вне дальности ближнего умения — подбегает, потом пишет «подошёл»', async () => {
+  const { b, held } = closeSetup([0, 0, 1]);
+  setTimeout(() => { b.running = false; }, 400);
+  await b.fight({ timeout: 5000 });
+  assert.ok(held.filter(k => k === 'W').length >= 2);
+  assert.ok(b.logs.some(l => String(l[2]).startsWith('сближение: подошёл')));
+});
+
+test('fight: цель в дальности — не бежит; профиль без closeInSpell — не бежит', async () => {
+  const { b, held } = closeSetup([1]);
+  setTimeout(() => { b.running = false; }, 300);
+  await b.fight({ timeout: 5000 });
+  assert.equal(held.filter(k => k === 'W').length, 0);
+  const c = closeSetup([0]);
+  c.b.combatCfg = () => ({});
+  setTimeout(() => { c.b.running = false; }, 300);
+  await c.b.fight({ timeout: 5000 });
+  assert.equal(c.held.filter(k => k === 'W').length, 0);
+});
+
+test('combatCfg паладина: Святая клятва (H) в списке баффов', () => {
+  const b = fresh();
+  b.profile = 'paladin';
+  const h = b.combatCfg().buffs.find(x => x.key === 'H');
+  assert.ok(h && h.everyMs > 0);
+});
+
+// --- обновление баффа в бою (Святая клятва) ---
+function buffFightSetup({ buffAt = 0, ready = 1 } = {}) {
+  const b = noProgSetup({ fight: true, attackers: 1 });
+  b.combatCfg = () => ({ buffs: [{ key: 'H', name: 'Святая клятва', everyMs: 60000, inFight: true, spell: 777 }] });
+  b.spells = () => [{ nameHash: 777, ready, inRange: 1 }];
+  b.switchToAttacker = async () => false;
+  b.lastHealCastAt = () => 0;
+  b.buffAt = { H: buffAt };
+  const pressed = [];
+  b.pressSpell = async h => { pressed.push(h); return true; };
+  return { b, pressed };
+}
+
+test('fight: интервал баффа с inFight вышел — обновляется в бою', async () => {
+  const { b, pressed } = buffFightSetup({ buffAt: Date.now() - 61000 });
+  setTimeout(() => { b.running = false; }, 300);
+  await b.fight({ timeout: 5000 });
+  assert.ok(pressed.includes(777));
+  assert.ok(b.buffAt.H > Date.now() - 2000);
+  assert.ok(b.logs.some(l => String(l[2]).startsWith('в бою обновлён бафф')));
+});
+
+test('fight: интервал не вышел или умение не готово — бафф в бою не жмётся', async () => {
+  const a = buffFightSetup({ buffAt: Date.now() - 1000 });
+  setTimeout(() => { a.b.running = false; }, 300);
+  await a.b.fight({ timeout: 5000 });
+  assert.equal(a.pressed.includes(777), false);
+  const c = buffFightSetup({ buffAt: Date.now() - 61000, ready: 0 });
+  setTimeout(() => { c.b.running = false; }, 300);
+  await c.b.fight({ timeout: 5000 });
+  assert.equal(c.pressed.includes(777), false);
+});
+
+test('combatCfg паладина: Печать повиновения (G) обновляется и в бою, не жмётся из ротации', () => {
+  const b = fresh();
+  b.profile = 'paladin';
+  const cc = b.combatCfg(), g = cc.buffs.find(x => x.key === 'G');
+  assert.equal(g.spell, 1453980521);
+  assert.equal(g.inFight, true);
+  assert.equal(g.everyMs, 20 * 60000);
+  assert.ok(cc.rotationSkip.includes(1453980521));
+});
+
+// --- поиск атакующего с поворотом (моб сзади) ---
+test('switchToAttacker: впереди никого — поворот на ~120° и повторный Tab; нашёл — остаётся', async () => {
+  const b = fresh();
+  b.running = true;
+  const turned = [];
+  let facing = 0, tabs = 0;
+  b.state = () => ({ facing, target: tabs >= 6, enemy: true, targetHp: 100 });
+  b.tabTarget = async () => { tabs++; return b.state(); };
+  b.pet = () => ({ ttPlayer: tabs >= 6 });
+  b.turnTo = async a => { turned.push(+a.toFixed(2)); facing = a; };
+  const ok = await b.switchToAttacker({ turns: 2 });
+  assert.equal(ok, true);
+  assert.equal(b.lastSwitchTurns, 1);          // 4 Tab впереди, поворот, найден на 2-м Tab
+  assert.equal(turned.length, 1);
+});
+
+test('switchToAttacker: никого нет — два поворота и возврат к прежнему курсу', async () => {
+  const b = fresh();
+  b.running = true;
+  const turned = [];
+  let facing = 1;
+  b.state = () => ({ facing, target: false });
+  b.tabTarget = async () => b.state();
+  b.pet = () => ({ ttPlayer: false });
+  b.turnTo = async a => { turned.push(+a.toFixed(2)); facing = a; };
+  const ok = await b.switchToAttacker({ turns: 2 });
+  assert.equal(ok, false);
+  assert.equal(b.lastSwitchTurns, 2);
+  assert.equal(turned.length, 3);              // два поворота + возврат
+  assert.equal(turned[2], 1);                  // вернулись к исходному курсу
+});
+
+test('switchToAttacker: без turns поворотов нет (как раньше)', async () => {
+  const b = fresh();
+  b.running = true;
+  let turns = 0;
+  b.state = () => ({ facing: 0, target: false });
+  b.tabTarget = async () => b.state();
+  b.pet = () => ({ ttPlayer: false });
+  b.turnTo = async () => { turns++; };
+  assert.equal(await b.switchToAttacker(), false);
+  assert.equal(turns, 0);
+  assert.equal(b.lastSwitchTabs, 4);
 });

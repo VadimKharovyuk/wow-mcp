@@ -21,6 +21,7 @@ function loadBot() {
   vm.createContext(win);
   const src = files.map(f => fs.readFileSync(path.join(BOT_DIR, f), 'utf8')).join(';\n');
   vm.runInContext(src, win, { filename: 'bot.js' });
+  win.bot.__win = win;          // только для тестов: подмена глобальных функций (chat и т. п.)
   return win.bot;
 }
 
