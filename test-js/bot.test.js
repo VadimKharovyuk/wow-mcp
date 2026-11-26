@@ -1194,3 +1194,66 @@ test('buildPatrolRoute: запрещённые советником точки �
   assert.equal(route.length, 1);
   assert.equal(route[0].x, 55);
 });
+
+// --- чат игры: ожидание открытия, закрытие зависшего поля, безопасные и повторные вызовы ---
+// Имитация игры: Enter переключает поле ввода (как в игре) через openDelay мс, Escape закрывает; набранное складывается в typed.
+function chatGame({ openDelay = 0, openOnEnter = () => true, startOpen = false } = {}) {
+  const b = fresh();
+  const w = b.__win, presses = [], typed = [];
+  w.__gameEditMode = startOpen ? 1 : 0;
+  let enters = 0;
+  w.document.getElementById = () => ({
+    dispatchEvent(ev) {
+      if (ev.type !== 'keydown') return;
+      presses.push(ev.code);
+      if (ev.code === 'Escape') w.__gameEditMode = 0;
+      if (ev.code === 'Enter') {
+        enters++;
+        if (!openOnEnter(enters)) return;
+        const toggle = () => { w.__gameEditMode = w.__gameEditMode === 0 ? 1 : 0; };
+        if (openDelay > 0) setTimeout(toggle, openDelay); else toggle();
+      }
+    },
+  });
+  w.wowKey = c => typed.push(c);
+  return { b, w, presses, typed };
+}
+
+test('chat: поле открылось с задержкой 400 мс — ждём и жмём Enter один раз (раньше второй Enter закрывал открывшееся поле)', async () => {
+  const { w, presses, typed } = chatGame({ openDelay: 400 });
+  await w.chat('/startattack');
+  assert.equal(presses.filter(c => c === 'Enter').length, 1);
+  assert.equal(String.fromCodePoint(...typed.slice(0, -1)), '/startattack');
+  assert.equal(typed[typed.length - 1], 13);                       // и отправлено Enter-ом
+});
+
+test('chat: поле уже открыто (зависло) — сначала Escape, потом обычное открытие', async () => {
+  const { w, presses } = chatGame({ startOpen: true });
+  await w.chat('/cleartarget');
+  assert.equal(presses[0], 'Escape');
+  assert.ok(presses.includes('Enter'));
+});
+
+test('chat: не открывается — 3 попытки и честная ошибка; chatSafe возвращает false и пишет в журнал, не роняя вызывающего', async () => {
+  const g = chatGame({ openOnEnter: () => false });
+  await assert.rejects(() => g.w.chat('/x'), /chat did not open/);
+  assert.equal(g.presses.filter(c => c === 'Enter').length, 3);
+  const h = chatGame({ openOnEnter: () => false });
+  h.w.bot = h.b;
+  assert.equal(await h.w.chatSafe('/startattack'), false);
+  assert.ok(h.b.logs.some(l => l[1] === 'chat' && String(l[2]).includes('/startattack')));
+  const ok = chatGame();
+  assert.equal(await ok.w.chatSafe('/cleartarget'), true);
+});
+
+test('chatRetry: первая серия попыток провалилась, со второй вышло — команда отправлена; нет «не в мире»-повтора', async () => {
+  // Enter 1..3 не открывают (первая серия), 4-й открывает
+  const { w, typed } = chatGame({ openOnEnter: n => n >= 4 });
+  await w.chatRetry('/run RepopMe()', 2);
+  assert.equal(String.fromCodePoint(...typed.slice(0, -1)), '/run RepopMe()');
+  const never = chatGame({ openOnEnter: () => false });
+  await assert.rejects(() => never.w.chatRetry('/x', 2), /chat did not open/);
+  const login = chatGame();
+  login.w.document.getElementById = () => ({ type: 'password', dispatchEvent() {} });
+  await assert.rejects(() => login.w.chatRetry('/x', 3), /not in world/);
+});

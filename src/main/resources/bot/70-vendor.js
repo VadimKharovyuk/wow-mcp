@@ -69,7 +69,7 @@ Object.assign(bot, {
 
   async dismount() {
     if (!this.mounted()) return;
-    await chat('/dismount');
+    await chatSafe('/dismount');
     await sleep(400);
   },
 
@@ -203,7 +203,7 @@ Object.assign(bot, {
 
     // 3) target vendor by name
     const targetVendor = async () => {
-      await chat('/target ' + vendor.name);
+      await chatRetry('/target ' + vendor.name);
       for (let i = 0; i < 20; i++) {
         await sleep(100);
         if (this.state().target) return true;
@@ -231,7 +231,7 @@ Object.assign(bot, {
         if (!f.found) { if (k === 0) break; continue; }
         if (!flagSet) {
           // окно закроет Lua после продажи и ремонта (только окно, открытое ботом)
-          await chat('/run BOTSELL=1');
+          await chatRetry('/run BOTSELL=1');
           flagSet = true;
         }
         this.mouse(f.point[0], f.point[1], 'mousedown', 2);

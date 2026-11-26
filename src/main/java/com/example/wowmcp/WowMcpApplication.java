@@ -23,6 +23,7 @@ public class WowMcpApplication {
     ///   cd ~/Downloads/wow-mcp
     ///./dashboard.sh open
     /// ./dashboard.sh stop
+    /// caffeinate -dimsu -t 28800
 
     public static void main(String[] args) {
         SpringApplication.run(WowMcpApplication.class, args);

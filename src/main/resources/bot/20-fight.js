@@ -571,7 +571,7 @@ Object.assign(bot, {
       // цель вплотную; повтор не чаще раза в 3 с (цель сменилась / автоатака сбилась). Не прерывает каст.
       if (cc && cc.autoAttack && s.target && s.enemy && s.targetHp > 0 && (s.tDist & 2) && now - lastAutoAtk > 3000) {
         lastAutoAtk = now;
-        await chat('/startattack');
+        await chatSafe('/startattack');
         continue;
       }
 

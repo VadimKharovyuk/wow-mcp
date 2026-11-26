@@ -25,7 +25,7 @@ Object.assign(bot, {
       if (reason) {
         bump(reason);
         // цель после клика отклонена — сбрасываем её
-        await chat('/cleartarget');
+        await chatSafe('/cleartarget');
         await sleep(150);
         continue;
       }

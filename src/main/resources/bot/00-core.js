@@ -34,23 +34,57 @@ window.wowTextFocus = m => {
 // написать строку в чат игры и отправить (например, chat('/run print(1)'))
 // Предохранители:
 //  - экран входа (поле пароля) — ничего не печатаем ('not in world');
-//  - чат не открылся после Enter (2 попытки) — честная ошибка ('chat did not open'),
-//    а не печать «в пустоту».
+//  - поле ввода уже открыто (зависло или его открыли руками) — сначала закрываем Escape: иначе Enter отправит/закроет его,
+//    а текст уйдёт не туда;
+//  - после Enter ждём открытия до 700 мс (в бою игра отвечает не сразу; фиксированные 250 мс давали ложное «не открылся» и второй
+//    Enter закрывал уже открывшееся поле); до 3 попыток; не открылось — честная ошибка ('chat did not open'), а не печать «в пустоту».
 window.chat = async text => {
   const field = () => document.getElementById('wow-text');
   const isPasswordScreen = () => !!field() && field().type === 'password';
   if (isPasswordScreen()) throw new Error('not in world');
 
+  if (window.__gameEditMode !== 0) {
+    await press('Escape', 'Escape', 27);
+    await sleep(200);
+    if (isPasswordScreen()) throw new Error('not in world');
+  }
   for (let attempt = 1; ; attempt++) {
     await press('Enter', 'Enter', 13);
-    await sleep(250);
-    if (isPasswordScreen()) throw new Error('not in world');
-    if (window.__gameEditMode !== 0) break;                 // игра открыла поле чата
-    if (attempt >= 2) throw new Error('chat did not open');
+    let opened = false;
+    for (let t = 0; t < 14 && !opened; t++) {
+      await sleep(50);
+      if (isPasswordScreen()) throw new Error('not in world');
+      opened = window.__gameEditMode !== 0;                  // игра открыла поле чата
+    }
+    if (opened) break;
+    if (attempt >= 3) throw new Error('chat did not open');
   }
   for (const ch of text) wowKey(ch.codePointAt(0));
   await sleep(100);
   wowKey(13);
+};
+
+// Некритичная команда (/cleartarget, /startattack, /target ...): не вышло — пишем в журнал и идём дальше, а не роняем бой и охоту.
+// true — отправлено. «Не в мире» (экран входа) пробрасывается: тут продолжать нельзя.
+window.chatSafe = async text => {
+  try { await window.chat(text); return true; }
+  catch (e) {
+    if (String(e && e.message) === 'not in world') throw e;
+    try { window.bot && window.bot.log && window.bot.log('warn', 'chat', 'чат не открылся, продолжаю без команды: ' + String(text).slice(0, 60), { what: String(text).slice(0, 80), err: String(e && e.message) }); } catch (e2) { /* журнал не мешает */ }
+    return false;
+  }
+};
+
+// Важная команда (продажа, воскрешение, выбор торговца): повторяем с паузой 1,5 с, пока не выйдет (по умолчанию 3 раза), потом ошибка.
+window.chatRetry = async (text, tries = 3) => {
+  for (let i = 1; ; i++) {
+    try { return await window.chat(text); }
+    catch (e) {
+      if (String(e && e.message) === 'not in world' || i >= tries) throw e;
+      try { window.bot && window.bot.log && window.bot.log('warn', 'chat', 'чат не открылся (попытка ' + i + ' из ' + tries + '), повторяю: ' + String(text).slice(0, 60), { what: String(text).slice(0, 80) }); } catch (e2) { /* журнал не мешает */ }
+      await sleep(1500);
+    }
+  }
 };
 
 window.KEYS = { W:['KeyW','w',87], A:['KeyA','a',65], D:['KeyD','d',68], S:['KeyS','s',83],

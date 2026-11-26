@@ -96,7 +96,7 @@ Object.assign(bot, {
     for (const nm of names) {
       if (!this.grinding || this.state().fight) return null;
       if ((this.nameCool[nm] || 0) > now) continue;       // до этого моба не дошли — пока не пробуем
-      await chat('/target ' + nm);
+      if (!(await chatSafe('/target ' + nm))) continue;        // чат не открылся — это имя пропускаем, остальное не страдает
       await sleep(300);
       await this.waitFrames(2);
       const s = this.state();
@@ -108,7 +108,7 @@ Object.assign(bot, {
         if (far && !this.grindCfg.nameFarOk) {
           if (this.grindStats) this.grindStats.byNameTooFar = (this.grindStats.byNameTooFar || 0) + 1;
           this.nameCool[nm] = Date.now() + 15000;
-          await chat('/cleartarget');
+          await chatSafe('/cleartarget');
           continue;
         }
         if (this.grindStats) {
@@ -137,7 +137,7 @@ Object.assign(bot, {
       { const byName = await this.findByName(); if (byName) return byName; }
       const r = await this.scanScreen({ minLvlDiff: this.grindCfg.minLvlDiff, maxLvlDiff: this.grindCfg.maxLvlDiff });
       if (r && r.found) return this.state();
-      await chat('/cleartarget');
+      await chatSafe('/cleartarget');
       return null;
     }
     if (quick) {
@@ -153,7 +153,7 @@ Object.assign(bot, {
       }
       if (!this.grinding) return null;
       { const byName = await this.findByName(); if (byName) return byName; }
-      await chat('/cleartarget');
+      await chatSafe('/cleartarget');
       return null;
     }
     for (let turn = 0; turn < 2 && this.grinding; turn++) {
@@ -167,7 +167,7 @@ Object.assign(bot, {
     { const byName = await this.findByName(); if (byName) return byName; }
     const r = await this.lookAround({ minLvlDiff: this.grindCfg.minLvlDiff, maxLvlDiff: this.grindCfg.maxLvlDiff });
     if (r && r.found) return this.state();
-    await chat('/cleartarget');
+    await chatSafe('/cleartarget');
     return null;
   },
 
@@ -574,7 +574,7 @@ Object.assign(bot, {
       const b = this.banTarget(f);
       st.unreachable = (st.unreachable || 0) + 1;
       if (this.log) this.log('warn', 'fight', 'цель недостижима — бан 60 с', { waitedMs: f.waitedMs, err: f.err, errTime: f.errTime, tDist: f.tDist, tLvl: f.tLvl, nameHash: b.hash, targetHpPct: f.targetHpPct, total: st.unreachable });
-      await chat('/cleartarget');
+      await chatSafe('/cleartarget');
       return null;
     }
     if (f.result === 'бой без противника') {
@@ -588,7 +588,7 @@ Object.assign(bot, {
       if (this.log) this.log('warn', 'fight', 'бой без противника — ' + (n >= IDLE_FIGHT_MAX ? 'охота останавливается' : 'отхожу и продолжаю охоту') + ' (' + n + ' из ' + IDLE_FIGHT_MAX + ' за 10 мин)',
           { n, max: IDLE_FIGHT_MAX, idleMs: f.idleMs, tLvl: f.tLvl, tDist: f.tDist, hp: f.hpMax ? Math.round(f.hp / f.hpMax * 100) : null });
       if (n >= IDLE_FIGHT_MAX) return 'бой: бой без противника (' + n + ' раза за 10 минут)';
-      await chat('/cleartarget');
+      await chatSafe('/cleartarget');
       await this.leaveCombat(st);
       return null;
     }
@@ -603,7 +603,7 @@ Object.assign(bot, {
       if (this.log) this.log('warn', 'fight', 'бой слишком долгий — ' + (n >= LONG_FIGHT_MAX ? 'охота останавливается' : 'продолжаю охоту') + ' (' + n + ' из ' + LONG_FIGHT_MAX + ' за 30 мин)',
           { n, max: LONG_FIGHT_MAX, tLvl: f.tLvl, tDist: f.tDist, attackers: f.attackers, hp: f.hpMax ? Math.round(f.hp / f.hpMax * 100) : null });
       if (n >= LONG_FIGHT_MAX) return 'бой: бой слишком долгий (' + n + ' раза за 30 минут)';
-      await chat('/cleartarget');
+      await chatSafe('/cleartarget');
       return null;
     }
     if (f.result !== 'бой окончен') return 'бой: ' + f.result;
@@ -833,7 +833,7 @@ Object.assign(bot, {
       if (Math.hypot(s.x - anchor.x, s.y - anchor.y) > farLimit) {
         // подходящий враг ближе ~10 м — бьём, а не пропускаем из-за радиуса гринда
         if (await this.nearbyHostile()) {
-          if (!(await this.approach())) { st.skipped++; await chat('/cleartarget'); continue; }
+          if (!(await this.approach())) { st.skipped++; await chatSafe('/cleartarget'); continue; }
           const p = await this.fightAndLoot(st); if (p) return out(p);
           continue;
         }
@@ -846,7 +846,7 @@ Object.assign(bot, {
       // на бегу уже выбрали подходящую цель (moveTo вернул 'цель') — начать бой отсюда, издалека
       if (scan && nearOk(this.state()) && this.goodPullTarget(this.state(), { needRange: true })) {
         progress();
-        if (!(await this.approach())) { st.skipped++; await chat('/cleartarget'); await wanderStep(); continue; }
+        if (!(await this.approach())) { st.skipped++; await chatSafe('/cleartarget'); await wanderStep(); continue; }
         const p = await this.fightAndLoot(st); if (p) return out(p);
         continue;
       }
@@ -864,7 +864,7 @@ Object.assign(bot, {
         if (t2) {
           progress();
           st.spotHits++;
-          if (!(await this.approach())) { st.skipped++; await chat('/cleartarget'); }
+          if (!(await this.approach())) { st.skipped++; await chatSafe('/cleartarget'); }
           else { const p = await this.fightAndLoot(st); if (p) return out(p); }
         } else {
           spot.empty++;
@@ -878,7 +878,7 @@ Object.assign(bot, {
       if (!this.grinding) break;
       if (tgt) {
         progress();
-        if (!(await this.approach())) { st.skipped++; await chat('/cleartarget'); await wanderStep(); continue; }
+        if (!(await this.approach())) { st.skipped++; await chatSafe('/cleartarget'); await wanderStep(); continue; }
         const p = await this.fightAndLoot(st); if (p) return out(p);
         continue;
       }
@@ -894,7 +894,7 @@ Object.assign(bot, {
           if (t2) {
             progress();
             st.spotHits++;
-            if (!(await this.approach())) { st.skipped++; await chat('/cleartarget'); }
+            if (!(await this.approach())) { st.skipped++; await chatSafe('/cleartarget'); }
             else { const p = await this.fightAndLoot(st); if (p) return out(p); }
           } else {
             spot.empty++;

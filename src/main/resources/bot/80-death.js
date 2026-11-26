@@ -27,7 +27,7 @@ Object.assign(bot, {
 
     // 1) отпустить дух
     if (d0.dead && !d0.ghost) {
-      await chat('/run RepopMe()');
+      await chatRetry('/run RepopMe()');
       if (!(await this.waitFor(() => (this.deathInfo() || {}).ghost, 15000, 250, aborted))) return fail(aborted() ? 'остановлен вручную' : 'дух не отпустился за 15 с');
     }
     if (aborted()) return fail('остановлен вручную');
@@ -64,13 +64,13 @@ Object.assign(bot, {
       if (!scan.found) break;
       this.warnings.push('у трупа враг, жду');
       if (this.warnings.length > 20) this.warnings.shift();
-      await chat('/cleartarget');
+      await chatSafe('/cleartarget');
       await sleep(4000);
     }
 
     // 6) воскреснуть (две попытки)
     for (let i = 0; i < 2; i++) {
-      await chat('/run RetrieveCorpse()');
+      await chatRetry('/run RetrieveCorpse()');
       const alive = await this.waitFor(() => { const d = this.deathInfo(); return !!d && !d.dead && !d.ghost; }, 10000, 250, aborted);
       if (alive || aborted()) break;
     }
