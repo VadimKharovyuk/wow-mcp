@@ -5,6 +5,7 @@ import com.example.wowmcp.db.HuntRepository;
 import com.example.wowmcp.db.VendorRepository;
 import com.example.wowmcp.game.GameBridge;
 import com.example.wowmcp.game.GameState;
+import com.example.wowmcp.spots.SpotService;
 import org.springframework.ai.tool.annotation.Tool;
 import org.springframework.ai.tool.annotation.ToolParam;
 import org.springframework.stereotype.Component;
@@ -30,12 +31,14 @@ public class HuntTools {
     private final Database db;
     private final HuntRepository hunts;
     private final VendorRepository vendors;
+    private final SpotService spots;
 
-    public HuntTools(GameBridge bridge, Database db, HuntRepository hunts, VendorRepository vendors) {
+    public HuntTools(GameBridge bridge, Database db, HuntRepository hunts, VendorRepository vendors, SpotService spots) {
         this.bridge = bridge;
         this.db = db;
         this.hunts = hunts;
         this.vendors = vendors;
+        this.spots = spots;
     }
 
     @Tool(name = "hunt", description = """
@@ -70,7 +73,8 @@ public class HuntTools {
         if (zoneId == null) {
             return jsonResult("зона " + state.zone() + " не известна, добавь в zone_map");
         }
-        List<Map<String, Object>> clusters = hunts.bestClusters(zoneId, state.pLvl(), state.x(), state.y(), maxDist, CLUSTERS_PASSED);
+        List<Map<String, Object>> clusters = hunts.bestClusters(zoneId, state.pLvl(), state.x(), state.y(), maxDist, CLUSTERS_PASSED,
+                spots.measuredCells(state.zone()));
         if (clusters.isEmpty()) {
             return jsonResult("подходящих мест охоты нет: уровень " + state.pLvl() + ", расстояние ≤ " + maxDist
                     + " (возможно, все помечены пустыми или в zone_map/mob_cluster нет данных)");

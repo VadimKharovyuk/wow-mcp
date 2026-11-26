@@ -21,6 +21,11 @@ public class StatsRepository {
     // ведущий пробел нужен: в текстовых блоках пробелы в конце строки отбрасываются ("AND" + "ts" склеились бы)
     private static final String SINCE_KILL = " killed_at >= now() - make_interval(hours => ?)";
     private static final String SINCE_EVENT = " ts >= now() - make_interval(hours => ?)";
+    // В снимках (game_event type=stat) иногда лежит мусор — число вида 0.000…1 вместо опыта (сбой чтения из памяти игры): такие строки
+    // не должны ронять приведение к числу. Бывают и «числа» из сотен цифр, поэтому длина ограничена. Ведущий пробел нужен по той же причине, что у SINCE_*.
+    private static final String STAT_OK = " AND data->>'level' ~ '^[0-9]{1,3}$' AND data->>'xp' ~ '^[0-9]{1,12}$' AND data->>'xpMax' ~ '^[0-9]{1,12}$'"
+            + " AND data->>'money' ~ '^[0-9]{1,12}$'";
+
     // то же в минутах — для сводки журнала за точный период (30 минут не должны превращаться в «1 час»)
     private static final String SINCE_KILL_M = " killed_at >= now() - make_interval(mins => ?)";
     private static final String SINCE_EVENT_M = " ts >= now() - make_interval(mins => ?)";
@@ -84,7 +89,7 @@ public class StatsRepository {
                              lag((data->>'level')::int) OVER w AS prev_level,
                              lag((data->>'xp')::bigint) OVER w AS prev_xp,
                              lag((data->>'xpMax')::bigint) OVER w AS prev_xpmax
-                      FROM game_event WHERE type='stat' AND """ + sinceEvent + """
+                      FROM game_event WHERE type='stat' AND """ + sinceEvent + STAT_OK + """
                       WINDOW w AS (ORDER BY ts)) t""", Long.class, hours);
         return v == null ? 0 : v;
     }
@@ -92,7 +97,7 @@ public class StatsRepository {
     /** Изменение денег за период (в меди): последний снимок минус первый. Траты на ремонт и покупки вычитаются. */
     private long moneyNet(String sinceEvent, int hours) {
         List<Long> rows = jdbc.queryForList("""
-                SELECT (data->>'money')::bigint FROM game_event WHERE type='stat' AND """ + sinceEvent + """
+                SELECT (data->>'money')::bigint FROM game_event WHERE type='stat' AND """ + sinceEvent + STAT_OK + """
                 ORDER BY ts""", Long.class, hours);
         return rows.size() < 2 ? 0 : rows.get(rows.size() - 1) - rows.get(0);
     }
@@ -114,7 +119,7 @@ public class StatsRepository {
         return jdbc.queryForList("""
                 SELECT ts, (data->>'level')::int AS level, (data->>'xp')::bigint AS xp, (data->>'xpMax')::bigint AS xp_max,
                        (data->>'money')::bigint AS money
-                FROM game_event WHERE type='stat' AND """ + SINCE_EVENT + " ORDER BY ts DESC LIMIT 1500", hours);
+                FROM game_event WHERE type='stat' AND """ + SINCE_EVENT + STAT_OK + " ORDER BY ts DESC LIMIT 1500", hours);
     }
 
     /** Последние запуски задач с числом убийств и окон добычи в каждом. */

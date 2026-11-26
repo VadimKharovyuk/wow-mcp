@@ -15,6 +15,9 @@ com.example.wowdashboard
 │              DigestRepository               только SQL по таблице bot_log
 │              Parts, Rates, Flags, Verdict   чистые расчёты (без БД): части периода, доли, выводы по цифрам, итог
 │              DigestText, Nums               текст сводки, числовые помощники
+├── hunting/   HuntingController               /api/hunting/best — лучшие места охоты: опыт в час, смерти, упоры
+│              HuntingService, HuntingRepository   загрузка данных (снимки опыта, убийства, смерти, упоры)
+│              HuntingModel (чистая модель)  окна по 10 минут, опыт в час, оценка клеток карты 2×2
 └── analyze/   AnalyzeController              /api/analyze, /api/analyze/last, /api/analyzer — разбор моделью
                LogAnalyzer                    отчёт: факты от программы, гипотезы от модели только по значимым проблемам
                ModelClient (OllamaClient)     интерфейс модели и его реализация для Ollama
@@ -38,6 +41,7 @@ js/stats.js         блок «Статистика»: карточки, гра�
 js/report-panel.js  общая панель «Разбор журнала» (период, окно вывода, статус)
 js/digest.js        сводка, копирование и скачивание JSON
 js/analyze.js       разбор моделью
+js/hunting.js       блок «Лучшие места охоты»
 ```
 Каждый блок страницы живёт в своём модуле и запускается независимо.
 

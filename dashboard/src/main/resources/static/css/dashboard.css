@@ -26,3 +26,6 @@
   button:hover { border-color:var(--bot); } button:disabled { opacity:.5; cursor:default; }
   .out { white-space:pre-wrap; word-break:break-word; background:var(--bg); border:1px solid var(--line); border-radius:8px; padding:10px; margin:0; max-height:520px; overflow:auto; font:13px/1.45 ui-monospace, Menlo, monospace; }
   canvas { max-height:260px; }
+
+  tr.top td { font-weight:600; }
+  td.good { color:var(--good); } td.bad { color:var(--bad); }

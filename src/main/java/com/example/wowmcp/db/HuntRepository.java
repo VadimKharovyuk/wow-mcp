@@ -1,5 +1,7 @@
 package com.example.wowmcp.db;
 
+import com.example.wowmcp.spots.SpotService;
+import com.example.wowmcp.spots.SpotStat;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
@@ -87,6 +89,15 @@ public class HuntRepository extends BaseRepository {
      * Оценка: spawns * found_rate / (1 + расстояние/10); found_rate = found/visits (без посещений — 1).
      */
     public List<Map<String, Object>> bestClusters(int zoneId, int pLvl, double x, double y, double maxDistance, int limit) {
+        return bestClusters(zoneId, pLvl, x, y, maxDistance, limit, Map.of());
+    }
+
+    /**
+     * То же, но оценка кластера поправлена измеренным опытом в час клетки карты, где он лежит (ключ «cx:cy» из
+     * {@link SpotService#keyFor}); там, где измерений нет или они ненадёжны, оценка прежняя.
+     */
+    public List<Map<String, Object>> bestClusters(int zoneId, int pLvl, double x, double y, double maxDistance, int limit,
+                                                  Map<String, SpotStat> measured) {
         if (!isEnabled()) return List.of();
         try {
             List<Map<String, Object>> rows = jdbc().query("""
@@ -115,7 +126,9 @@ public class HuntRepository extends BaseRepository {
                 int visits = (Integer) c.get("visits");
                 double foundRate = visits > 0 ? (double) (Integer) c.get("found") / visits : 1.0;
                 c.put("distance", Math.round(dist * 10) / 10.0);
-                c.put("score", score((Integer) c.get("spawns"), foundRate, dist));
+                SpotStat m = measured.get(SpotService.keyFor((Double) c.get("cx"), (Double) c.get("cy")));
+                c.put("score", adjusted(score((Integer) c.get("spawns"), foundRate, dist), m));
+                if (m != null) c.put("measuredXpPerHour", m.xpPerHour());
                 out.add(c);
             }
             out.sort((a, b) -> Double.compare((Double) b.get("score"), (Double) a.get("score")));
@@ -124,6 +137,16 @@ public class HuntRepository extends BaseRepository {
             log.warn("Не удалось прочитать кластеры: {}", e.getMessage());
             return List.of();
         }
+    }
+
+    /**
+     * Поправка оценки на измеренный опыт в час клетки: ±50% от отличия клетки от среднего (оценка 1.3 при +30% к среднему, 0.8 при −20%).
+     * Измерения с низкой надёжностью (мало времени в клетке) не учитываются — оценка остаётся прежней.
+     */
+    static double adjusted(double base, SpotStat measured) {
+        if (measured == null || "низкая".equals(measured.confidence())) return base;
+        double factor = 1 + Math.max(-0.5, Math.min(0.5, measured.vsAveragePct() / 100.0));
+        return base * factor;
     }
 
     static double score(int spawns, double foundRate, double distance) {

@@ -20,6 +20,9 @@ import org.springframework.scheduling.annotation.EnableScheduling;
 @ConfigurationPropertiesScan
 @EnableScheduling
 public class WowMcpApplication {
+    ///   cd ~/Downloads/wow-mcp
+    ///./dashboard.sh open
+    /// ./dashboard.sh stop
 
     public static void main(String[] args) {
         SpringApplication.run(WowMcpApplication.class, args);
@@ -31,9 +34,10 @@ public class WowMcpApplication {
                                                  RecordingTools recording, RotationTools rotation,
                                                  InventoryTools inventory, PlaceTools places, HuntTools hunt, RoadTools roadTools,
                                                  com.example.wowmcp.tools.LogTools logTools,
-                                                 com.example.wowmcp.tools.HealthTools healthTools) {
+                                                 com.example.wowmcp.tools.HealthTools healthTools,
+                                                 com.example.wowmcp.tools.SpotTools spotTools) {
         return MethodToolCallbackProvider.builder()
-                .toolObjects(actions, grind, recording, rotation, inventory, places, hunt, roadTools, logTools, healthTools)
+                .toolObjects(actions, grind, recording, rotation, inventory, places, hunt, roadTools, logTools, healthTools, spotTools)
                 .build();
     }
 
