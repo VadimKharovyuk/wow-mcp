@@ -1,4 +1,8 @@
 // 40-grind.js — цикл гринда: найти моба → подойти → бой (+ лут) → отдых → повтор.
+// Сколько «слишком долгих» боёв за 30 минут останавливают охоту (меньше — снимаем цель и продолжаем)
+const LONG_FIGHT_MAX = 3;
+// «Бой без противника» (боевой флаг висит, нет ни урона, ни цели): сколько раз за 10 минут останавливают охоту (меньше — отходим и продолжаем)
+const IDLE_FIGHT_MAX = 4;
 Object.assign(bot, {
   grindCfg: {
     mode: 'radius',     // 'radius' — охота вокруг старта; 'patrol' — обход мест по кольцу
@@ -533,6 +537,29 @@ Object.assign(bot, {
     return s.fight || isReady(this.grindCfg.pullKey) || (s.tDist & 2);
   },
 
+  // Выход из «боя без противника»: отходим от места (к якорю охоты, если далеко от него, иначе в случайную сторону) и ждём, пока боевой флаг
+  // сбросится. Бежим вручную: moveTo в бою сразу возвращает «бой».
+  async leaveCombat(st, runMs = 4000) {
+    const abort = () => !this.grinding;
+    const s0 = this.state(), anchor = st && st.anchor;
+    const toAnchor = anchor && Math.hypot(s0.x - anchor.x, s0.y - anchor.y) > 0.25;
+    const ang = toAnchor ? Math.atan2(-(anchor.x - s0.x), -(anchor.y - s0.y)) : Math.random() * 2 * Math.PI;
+    const t0 = Date.now();
+    await this.turnTo(ang, 2500, abort);
+    this.key('W', true);
+    try {
+      while (!abort() && Date.now() - t0 < runMs) {
+        await sleep(200);
+        const s = this.state();
+        if (s.dead || s.hp === 0 || (s.attackers != null && s.attackers >= 1)) break;     // напали — дальше разберётся бой
+      }
+    } finally { this.key('W', false); }
+    const cleared = await this.waitFor(() => !this.state().fight, 12000, 500, abort);
+    if (this.log) this.log('info', 'fight', 'отход после боя без противника: ' + (cleared ? 'боевой флаг сброшен' : 'флаг всё ещё висит'),
+        { toAnchor: !!toAnchor, cleared, movedMs: Date.now() - t0 });
+    return cleared;
+  },
+
   // бой (+ лут, если grindCfg.loot); возвращает null если всё ок, иначе причину для выхода из гринда
   async fightAndLoot(st) {
     if (!this.grinding) return 'остановлен вручную';   // fight() сам включает running — после stop() не начинать бой
@@ -547,6 +574,35 @@ Object.assign(bot, {
       const b = this.banTarget(f);
       st.unreachable = (st.unreachable || 0) + 1;
       if (this.log) this.log('warn', 'fight', 'цель недостижима — бан 60 с', { waitedMs: f.waitedMs, err: f.err, errTime: f.errTime, tDist: f.tDist, tLvl: f.tLvl, nameHash: b.hash, targetHpPct: f.targetHpPct, total: st.unreachable });
+      await chat('/cleartarget');
+      return null;
+    }
+    if (f.result === 'бой без противника') {
+      // боевой флаг висит, а противника нет ≥ 20 с: снимаем цель, отходим, ждём сброса флага — и продолжаем охоту.
+      // Останавливаемся, только если так случилось IDLE_FIGHT_MAX раз за 10 минут.
+      const now = Date.now();
+      this.idleFightTimes = (this.idleFightTimes || []).filter(t => now - t < 10 * 60000);
+      this.idleFightTimes.push(now);
+      const n = this.idleFightTimes.length;
+      st.idleFights = (st.idleFights || 0) + 1;
+      if (this.log) this.log('warn', 'fight', 'бой без противника — ' + (n >= IDLE_FIGHT_MAX ? 'охота останавливается' : 'отхожу и продолжаю охоту') + ' (' + n + ' из ' + IDLE_FIGHT_MAX + ' за 10 мин)',
+          { n, max: IDLE_FIGHT_MAX, idleMs: f.idleMs, tLvl: f.tLvl, tDist: f.tDist, hp: f.hpMax ? Math.round(f.hp / f.hpMax * 100) : null });
+      if (n >= IDLE_FIGHT_MAX) return 'бой: бой без противника (' + n + ' раза за 10 минут)';
+      await chat('/cleartarget');
+      await this.leaveCombat(st);
+      return null;
+    }
+    if (f.result === 'бой слишком долгий') {
+      // Долгий бой без прогресса (зависший боевой флаг, цель недостижима) не должен останавливать всю охоту: снимаем цель и идём дальше.
+      // Останавливаемся, только если так случилось LONG_FIGHT_MAX раз за 30 минут — значит, что-то сломано системно.
+      const now = Date.now();
+      this.longFightTimes = (this.longFightTimes || []).filter(t => now - t < 30 * 60000);
+      this.longFightTimes.push(now);
+      const n = this.longFightTimes.length;
+      st.longFights = (st.longFights || 0) + 1;
+      if (this.log) this.log('warn', 'fight', 'бой слишком долгий — ' + (n >= LONG_FIGHT_MAX ? 'охота останавливается' : 'продолжаю охоту') + ' (' + n + ' из ' + LONG_FIGHT_MAX + ' за 30 мин)',
+          { n, max: LONG_FIGHT_MAX, tLvl: f.tLvl, tDist: f.tDist, attackers: f.attackers, hp: f.hpMax ? Math.round(f.hp / f.hpMax * 100) : null });
+      if (n >= LONG_FIGHT_MAX) return 'бой: бой слишком долгий (' + n + ' раза за 30 минут)';
       await chat('/cleartarget');
       return null;
     }

@@ -938,3 +938,171 @@ test('Lua: имена глобальных таблиц модулей не со
   }
   assert.ok(tables.length >= 6);
 });
+
+// --- «Взаимодействовать с целью» (interactKey): автоподход к дальней/зарытой цели или цели сзади ---
+function interactSetup({ range = 0, dyn = null, over = {}, offscreen = false } = {}) {
+  const b = noProgSetup({ fight: true, attackers: 1, ...over, dyn });
+  b.combatCfg = () => ({ interactKey: 'J', closeInSpell: 111 });
+  b.pet = () => ({ exists: false, ttPlayer: true, ttPet: false });
+  b.spellInRange = () => range;
+  b.lastHealCastAt = () => 0;
+  b.casting = () => false;
+  b.targetOffscreen = () => offscreen;
+  const taps = [], turns = [];
+  b.tap = async k => { taps.push(k); };
+  b.turnTo = async a => { turns.push(a); };
+  b.hold = async () => { await new Promise(r => setTimeout(r, 40)); };   // как в игре: удержание клавиши занимает время
+  return { b, taps, turns };
+}
+
+test('интеракт: цель вне дальности ближнего умения и урона нет — жмёт interactKey и пишет в журнал', async () => {
+  const { b, taps } = interactSetup({ range: 0 });
+  setTimeout(() => { b.running = false; }, 2600);
+  await b.fight({ timeout: 5000 });
+  assert.ok(taps.includes('J'));
+  const rec = b.logs.find(l => String(l[2]).startsWith('интеракт: нажата (вне дальности)'));   // не раньше чем через 2 с после начала боя
+  assert.ok(rec && rec[3].why === 'вне дальности');
+});
+
+test('интеракт: цель в дальности — не жмёт; ошибка «не лицом» — жмёт', async () => {
+  const near = interactSetup({ range: 1 });
+  setTimeout(() => { near.b.running = false; }, 2600);
+  await near.b.fight({ timeout: 5000 });
+  assert.equal(near.taps.includes('J'), false);
+  const back = interactSetup({ range: 1, over: { err: 1, errTime: 5, time: 1 } });
+  setTimeout(() => { back.b.running = false; }, 2600);
+  await back.b.fight({ timeout: 5000 });
+  assert.ok(back.taps.includes('J'));
+  assert.ok(back.b.logs.some(l => String(l[2]).includes('(не лицом)')));
+});
+
+test('интеракт: мы наносим урон цели — не жмёт; повтор не чаще раза в 2,5 с', async () => {
+  const hitting = interactSetup({ range: 0, dyn: t => ({ targetHp: 500 - t }) });
+  setTimeout(() => { hitting.b.running = false; }, 2600);
+  await hitting.b.fight({ timeout: 5000 });
+  assert.equal(hitting.taps.includes('J'), false);
+  const once = interactSetup({ range: 0 });
+  setTimeout(() => { once.b.running = false; }, 3500);
+  await once.b.fight({ timeout: 5000 });
+  assert.equal(once.taps.filter(k => k === 'J').length, 1);
+});
+
+test('интеракт: без interactKey в профиле правило молчит; во время автоподхода не вертится и не бежит вручную', async () => {
+  const none = interactSetup({ range: 0 });
+  none.b.combatCfg = () => ({ closeInSpell: 111 });
+  setTimeout(() => { none.b.running = false; }, 2600);
+  await none.b.fight({ timeout: 5000 });
+  assert.equal(none.taps.includes('J'), false);
+  // цель вне экрана и наше HP падает (canTurn был бы true), но 3 с после интеракта доворота нет
+  const walking = interactSetup({ range: 0, offscreen: true, over: { dyn: t => ({ hp: Math.max(60, 100 - 3 * t) }) } });
+  setTimeout(() => { walking.b.running = false; }, 2600);
+  await walking.b.fight({ timeout: 5000 });
+  assert.ok(walking.taps.includes('J'));
+  assert.equal(walking.turns.length, 0);
+});
+
+test('combatCfg паладина: interactKey = J', () => {
+  const b = fresh(); b.profile = 'paladin';
+  assert.equal(b.combatCfg().interactKey, 'J');
+});
+
+// --- «бой слишком долгий» не останавливает охоту, пока не повторится 3 раза за 30 минут ---
+function longFightSetup() {
+  const b = fresh();
+  const chats = [];
+  b.__win.chat = async c => { chats.push(c); };
+  b.grinding = true;
+  b.grindCfg = {};
+  b.dead = () => false;
+  b.fight = async () => ({ result: 'бой слишком долгий', hp: 100, hpMax: 100, tLvl: -1, tDist: 1, attackers: 1 });
+  return { b, chats, st: { kills: 0 } };
+}
+
+test('бой слишком долгий: первые два раза охота продолжается (цель снимается), на третий за 30 минут — останавливается', async () => {
+  const { b, chats, st } = longFightSetup();
+  assert.equal(await b.fightAndLoot(st), null);
+  assert.equal(await b.fightAndLoot(st), null);
+  assert.deepEqual(chats, ['/cleartarget', '/cleartarget']);
+  assert.equal(st.kills, 0);
+  assert.equal(st.longFights, 2);
+  assert.equal(await b.fightAndLoot(st), 'бой: бой слишком долгий (3 раза за 30 минут)');
+  assert.ok(b.logs.some(l => String(l[2]).includes('продолжаю охоту (1 из 3')));
+  assert.ok(b.logs.some(l => String(l[2]).includes('охота останавливается (3 из 3')));
+});
+
+test('бой слишком долгий: старые случаи (больше 30 минут назад) не считаются', async () => {
+  const { b, st } = longFightSetup();
+  b.longFightTimes = [Date.now() - 31 * 60000, Date.now() - 40 * 60000];
+  assert.equal(await b.fightAndLoot(st), null);
+  assert.equal(b.longFightTimes.length, 1);
+});
+
+// --- «бой без противника»: боевой флаг висит, а урона, цели и траты маны нет ---
+function idleFightSetup(over = {}, dyn = null) {
+  const b = noProgSetup({ fight: true, attackers: 0, target: false, enemy: false, targetHp: 0, ...over, dyn });
+  b.grindCfg = { idleFightMs: 400, noProgressMs: 60000 };
+  b.tabTarget = async () => { await new Promise(r => setTimeout(r, 30)); return b.state(); };
+  b.switchToAttacker = async () => false;
+  return b;
+}
+
+test('fight: боевой флаг висит, 20 с (тут 0,4 с) нет урона, цели и маны — «бой без противника»', async () => {
+  const b = idleFightSetup();
+  const r = await b.fight({ timeout: 10000 });
+  assert.equal(r.result, 'бой без противника');
+  assert.ok(r.idleMs >= 400);
+});
+
+test('fight: трата маны, урон по нам или нас бьют — это активность, «боя без противника» нет', async () => {
+  for (const dyn of [t => ({ manaPct: 1e6 - t }), t => ({ hp: 1e6 - t }), () => ({ attackers: 1 })]) {   // значения только убывают: активность не прекращается
+    const b = idleFightSetup({}, dyn);
+    setTimeout(() => { b.running = false; }, 1200);
+    const r = await b.fight({ timeout: 10000 });
+    assert.notEqual(r.result, 'бой без противника');
+  }
+});
+
+function idleGrindSetup() {
+  const b = fresh();
+  const chats = [], left = [];
+  b.__win.chat = async c => { chats.push(c); };
+  b.grinding = true; b.grindCfg = {}; b.dead = () => false;
+  b.fight = async () => ({ result: 'бой без противника', idleMs: 21000, hp: 100, hpMax: 100, tLvl: 0, tDist: 0 });
+  b.leaveCombat = async st => { left.push(st); return true; };
+  return { b, chats, left, st: { kills: 0 } };
+}
+
+test('бой без противника: цель снимается, бот отходит, охота продолжается; 4-й раз за 10 минут — останавливается', async () => {
+  const { b, chats, left, st } = idleGrindSetup();
+  for (let i = 0; i < 3; i++) assert.equal(await b.fightAndLoot(st), null);
+  assert.deepEqual(chats, ['/cleartarget', '/cleartarget', '/cleartarget']);
+  assert.equal(left.length, 3);
+  assert.equal(st.kills, 0);
+  assert.equal(st.idleFights, 3);
+  assert.equal(await b.fightAndLoot(st), 'бой: бой без противника (4 раза за 10 минут)');
+  assert.ok(b.logs.some(l => String(l[2]).includes('отхожу и продолжаю охоту (1 из 4')));
+  assert.equal(left.length, 3);                                   // на последнем разе не отходим — охота останавливается
+});
+
+test('бой без противника: случаи старше 10 минут не считаются', async () => {
+  const { b, st } = idleGrindSetup();
+  b.idleFightTimes = [Date.now() - 11 * 60000, Date.now() - 20 * 60000, Date.now() - 30 * 60000];
+  assert.equal(await b.fightAndLoot(st), null);
+  assert.equal(b.idleFightTimes.length, 1);
+});
+
+test('leaveCombat: поворачивается к якорю, бежит вперёд, ждёт сброса боевого флага', async () => {
+  const b = fresh();
+  b.grinding = true;
+  let calls = 0;
+  b.state = () => ({ x: 50, y: 50, hp: 100, dead: false, attackers: 0, fight: ++calls < 6 });
+  const turns = [], keys = [];
+  b.turnTo = async a => { turns.push(+a.toFixed(2)); };
+  b.key = (k, on) => { keys.push(k + (on ? '+' : '-')); };
+  const cleared = await b.leaveCombat({ anchor: { x: 50, y: 50.5 } }, 300);
+  assert.equal(cleared, true);
+  assert.equal(turns.length, 1);
+  assert.equal(Math.abs(turns[0]), 3.14);         // якорь южнее (y больше): курс |π|, как в moveTo atan2(-dx, -dy)
+  assert.deepEqual(keys, ['W+', 'W-']);
+  assert.ok(b.logs.some(l => String(l[2]).includes('боевой флаг сброшен')));
+});

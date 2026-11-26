@@ -57,7 +57,7 @@ Object.assign(bot, {
                  healGuard: { 666458133: 0.60 /* Вспышка света (ранги) */, 326428551: 0.60 /* Вспышка света, другое написание */,
                               1488691226: 0.35 /* Свет небес */,
                               1396923377: 0.09 /* Возложение рук — только при HP < 9% (как в аварийном блоке) */ },
-                 mountKey: 'L' /* Призыв боевого коня */, closeInSpell: 1363607377 /* Молот праведника: вне его дальности — подбегаем */, autoAttack: true, stepBackOnFacing: true,
+                 mountKey: 'L' /* Призыв боевого коня */, interactKey: 'J' /* «Взаимодействовать с целью» (назначить в игре: Esc → Назначение клавиш): сам разворачивает и подводит к цели */, closeInSpell: 1363607377 /* Молот праведника: вне его дальности — подбегаем */, autoAttack: true, stepBackOnFacing: true,
                  finishers: [1101686797 /* Молот гнева (клавиша U, id 24275): только при HP цели < 20% */],
                  pullSpells: [1700418603 /* Длань возмездия */, 1953631017 /* «Дань возмездия» — на случай другого написания */],
                  buffs: [
@@ -195,6 +195,11 @@ Object.assign(bot, {
     let noAttackSince = 0, hpAtNoAttack = 0, lastSwitch = 0, trapAt = 0, pullTries = 0, lastPull = 0, lastAutoAtk = 0, stepBacks = 0, lastAttackerTry = 0, lastFinish = 0, openerWaited = false, openerPressed = false, openerNoted = false, lastFastSwitch = 0, skipLogAt = {}, faceEpisodes = 0, lastFaceAt = 0;
     // вращение/поиск атакующего: только если мы не наносим урон и нас реально бьют; после неудачи — откат 8 → 15 → 30 с
     let dealtAt = 0, prevTHp = null, searchFails = 0, nextSearchAt = 0;
+    // «Взаимодействовать с целью» (interactKey): клиент сам разворачивает персонажа и ведёт к цели; пока идёт автоподход, сами не вертимся и не бежим
+    let lastInteractAt = 0, interactUntil = 0, interactTries = 0, lastInteractTime = 0;
+    // «бой без противника»: боевой флаг висит, а ≥ idleFightMs нет ни нашего урона, ни полученного, ни траты маны/каста
+    const idleMs = (this.grindCfg && this.grindCfg.idleFightMs) || 20000;
+    let idleActiveAt = Date.now(), prevMana = null, prevMyHp = null;
     const hpSamples = [];
     const BACKOFF = [8000, 15000, 30000];
     // «нет прогресса»: цель недостижима (за колонной, на уступе, эвейд) — HP цели не меняется, нас никто не бьёт
@@ -225,13 +230,25 @@ Object.assign(bot, {
 
       // Учёт: когда последний раз падало HP цели (мы наносим урон) и сколько HP потеряли мы за последние ~4 с
       const tnow = Date.now();
-      if (prevTHp != null && s.target && s.targetHp < prevTHp) dealtAt = tnow;
+      if (prevTHp != null && s.target && s.targetHp < prevTHp) { dealtAt = tnow; interactTries = 0; }
       prevTHp = s.target ? s.targetHp : null;
       hpSamples.push({ t: tnow, p: hpPct });
       while (hpSamples.length && tnow - hpSamples[0].t > 4000) hpSamples.shift();
       const lostHp = Math.max(...hpSamples.map(x => x.p)) - hpPct;
-      const canTurn = tnow - dealtAt > 3000 && lostHp >= 0.03;   // не бьём никого ≥ 3 с, а наше HP упало ≥ 3% — только тогда вертимся
+      const canTurn = tnow - dealtAt > 3000 && lostHp >= 0.03 && tnow >= interactUntil;   // не бьём никого ≥ 3 с, а наше HP упало ≥ 3% — только тогда вертимся
       if (s.attackers === 0) { searchFails = 0; nextSearchAt = 0; }   // бьют уже не нас — откат сбрасываем
+
+      // Простой в бою: любая активность (урон по цели, урон по нам, нас бьют, трата маны, каст) сбрасывает таймер. Не было ничего ≥ idleMs,
+      // а боевой флаг висит (зависший флаг, моб за краем видимости, зарытая цель) — выходим с результатом «бой без противника».
+      {
+        const mana = s.manaPct || 0;
+        const spent = prevMana != null && mana < prevMana - 0.004;
+        const hit = prevMyHp != null && s.hp < prevMyHp;
+        prevMana = mana; prevMyHp = s.hp;
+        if (dealtAt > idleActiveAt) idleActiveAt = dealtAt;
+        if (spent || hit || (s.attackers != null && s.attackers >= 1) || this.casting()) idleActiveAt = tnow;
+        if (s.fight && tnow - idleActiveAt >= idleMs) { this.release(); return { result: 'бой без противника', idleMs: tnow - idleActiveAt, ...s }; }
+      }
 
       if (!s.target || !s.enemy || s.targetHp === 0) {
         // цель умерла/пропала, а бой идёт: берём того, кто бьёт нас (Tab до «целится в игрока»), а не случайного врага.
@@ -446,6 +463,21 @@ Object.assign(bot, {
         }
       }
 
+      // Интеракт: бой идёт, цель выбрана, мы её не бьём ≥ 2 с, а умения не достают (вне дальности) или цель не перед нами (ошибка «не лицом») —
+      // нажимаем «Взаимодействовать с целью»: клиент сам разворачивает персонажа и подводит к цели (дальний моб, цель сзади, зарытая цель
+      // без полосы здоровья). Не чаще раза в 2,5 с, до 8 попыток подряд без урона; 3 с после нажатия сами не вертимся и не бежим.
+      if (cc && cc.interactKey && s.fight && s.target && s.enemy && s.targetHp > 0 && !casting
+          && tnow - Math.max(dealtAt, t0) > 2000 && tnow - lastInteractAt > 2500 && interactTries < 8) {   // t0 — начало боя: первые 2 с даём шанс ротации
+        const rngI = cc.closeInSpell ? this.spellInRange(cc.closeInSpell) : -1;
+        const why = rngI === 0 ? 'вне дальности' : (s.err === 1 && s.errTime > lastInteractTime ? 'не лицом' : null);
+        if (why) {
+          lastInteractAt = tnow; interactUntil = tnow + 3000; interactTries++; lastInteractTime = s.time;
+          await this.tap(cc.interactKey);
+          this.log && this.log('info', 'fight', 'интеракт: нажата (' + why + ')', { why, tDist: s.tDist, attackers: s.attackers, hp: Math.round(hpPct * 100), tries: interactTries });
+          continue;
+        }
+      }
+
       // Цель выбрана и бьёт нас, но её полосы нет на экране — она сзади или сбоку (Tab, скрытая цель, моб обошёл): доворачиваемся по
       // кругу шагами ~90°, пока полоса не появится, и наводимся на неё. Не больше 3 заходов за бой, не чаще раза в 4 с.
       if (s.fight && s.target && s.enemy && s.targetHp > 0 && !casting && faceEpisodes < 3 && now - lastFaceAt > 4000 && canTurn && this.targetOffscreen()) {
@@ -479,7 +511,7 @@ Object.assign(bot, {
 
       // Сближение: ближний профиль (cc.closeInSpell — умение ближнего боя на панели), бой идёт, а цель вне его дальности —
       // моб бьёт издалека (кастер, лучник). Доворачиваемся к цели и подбегаем короткими кусками; не больше 10 с за бой.
-      if (cc && cc.closeInSpell && s.fight && s.target && s.enemy && s.targetHp > 0 && closeSpent < 10000 && !this.targetOffscreen()
+      if (cc && cc.closeInSpell && s.fight && s.target && s.enemy && s.targetHp > 0 && closeSpent < 10000 && tnow >= interactUntil && !this.targetOffscreen()
           && now - this.lastHealCastAt() > HEAL_CAST_LOCK_MS) {
         const rng = this.spellInRange(cc.closeInSpell);
         if (rng === 0) {
