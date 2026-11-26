@@ -255,6 +255,8 @@ Object.assign(bot, {
       if (s.fight || s.dead || s.ghost || this.casting()) return;
       if (s.manaPct < 0.15) return;
       if (Date.now() - (this.buffAt[b.key] || 0) < b.everyMs) continue;
+      // умение на перезарядке (печать: бафф 30 мин и кд 30 мин) — таймер не сдвигаем, попробуем в следующем цикле
+      if (b.spell) { const rec = (this.spells() || []).find(r => r.nameHash === b.spell); if (rec && rec.ready === 0) continue; }
       this.buffAt[b.key] = Date.now();
       await this.tap(b.key);
       await sleep(600);

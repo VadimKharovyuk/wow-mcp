@@ -712,8 +712,25 @@ test('combatCfg паладина: Печать повиновения (G) обн
   const cc = b.combatCfg(), g = cc.buffs.find(x => x.key === 'G');
   assert.equal(g.spell, 1453980521);
   assert.equal(g.inFight, true);
-  assert.equal(g.everyMs, 20 * 60000);
+  assert.equal(g.everyMs, 25 * 60000);
   assert.ok(cc.rotationSkip.includes(1453980521));
+});
+
+test('ensureBuffs: умение на перезарядке — таймер баффа не сдвигается, готово — жмётся', async () => {
+  for (const [ready, expectPress] of [[0, false], [1, true]]) {
+    const b = fresh();
+    b.grinding = true;
+    b.state = () => ({ fight: false, dead: false, ghost: false, manaPct: 1 });
+    b.casting = () => false;
+    b.spells = () => [{ nameHash: 777, ready }];
+    b.waitFor = async () => true;
+    const pressed = [];
+    b.tap = async k => { pressed.push(k); };
+    b.buffAt = { G: 0 };
+    await b.ensureBuffs({ buffs: [{ key: 'G', everyMs: 25 * 60000, spell: 777 }] });
+    assert.equal(pressed.includes('G'), expectPress);
+    assert.equal(b.buffAt.G === 0, !expectPress);
+  }
 });
 
 // --- поиск атакующего с поворотом (моб сзади) ---
