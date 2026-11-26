@@ -1106,3 +1106,91 @@ test('leaveCombat: поворачивается к якорю, бежит впе
   assert.deepEqual(keys, ['W+', 'W-']);
   assert.ok(b.logs.some(l => String(l[2]).includes('боевой флаг сброшен')));
 });
+
+// --- правила советника (96-advisor.js) ---
+const inMs = ms => Date.now() + ms;
+
+test('applyDirectives: принимает правильные правила и отбрасывает неправильные (вид, границы, радиус, срок)', () => {
+  const b = fresh();
+  const n = b.applyDirectives([
+    { kind: 'avoid_spot', zone: 401, x: 79, y: 27, r: 1.4, until: inMs(60000) },
+    { kind: 'penalize_spot', zone: 401, x: 81, y: 29, r: 1.4, until: inMs(60000) },
+    { kind: 'avoid_point', zone: 401, x: 79.3, y: 26.5, r: 0.15, until: inMs(60000) },
+    { kind: 'format_disk', zone: 401, x: 1, y: 1, r: 1, until: inMs(60000) },          // неизвестный вид
+    { kind: 'avoid_spot', zone: 401, x: 120, y: 27, r: 1, until: inMs(60000) },        // вне карты
+    { kind: 'avoid_spot', zone: 401, x: 50, y: 50, r: 30, until: inMs(60000) },        // радиус слишком большой
+    { kind: 'avoid_spot', zone: 401, x: 50, y: 50, r: 1, until: Date.now() - 1 },      // срок вышел
+    { kind: 'avoid_spot', zone: 'x', x: 50, y: 50, r: 1, until: inMs(60000) },         // не число
+    null,
+  ]);
+  assert.equal(n, 3);
+  assert.deepEqual(plain(b.directives.map(d => d.kind)), ['avoid_spot', 'penalize_spot', 'avoid_point']);
+  assert.equal(b.applyDirectives('мусор'), 0);                                        // не список — очищает
+  assert.equal(b.directives.length, 0);
+});
+
+test('directiveFactor: запрет → 0, штраф → 0.5, вне клетки или другая зона → 1, истёкшее правило не действует', () => {
+  const b = fresh();
+  b.applyDirectives([
+    { kind: 'avoid_spot', zone: 401, x: 79, y: 27, r: 1.4, until: inMs(60000) },
+    { kind: 'penalize_spot', zone: 401, x: 81, y: 29, r: 1.4, until: inMs(60000) },
+    { kind: 'avoid_point', zone: 401, x: 60, y: 60, r: 0.15, until: inMs(60000) },
+  ]);
+  assert.equal(b.directiveFactor(401, 79.5, 27.5), 0);
+  assert.equal(b.directiveFactor(401, 81, 29), 0.5);
+  assert.equal(b.directiveFactor(401, 70, 70), 1);
+  assert.equal(b.directiveFactor(115, 79, 27), 1);                                    // другая зона
+  assert.equal(b.directiveFactor(401, 60, 60), 1);                                    // точка упора места охоты не меняет
+  b.directives[0].until = Date.now() - 1;
+  assert.equal(b.directiveFactor(401, 79.5, 27.5), 1);
+});
+
+test('applyDirectives: точка упора попадает в память упоров как надёжная; повтор не дублирует', () => {
+  const b = fresh();
+  const d = [{ kind: 'avoid_point', zone: 401, x: 79.3, y: 26.5, r: 0.15, until: inMs(60000) }];
+  b.applyDirectives(d);
+  b.applyDirectives(d);
+  const pts = b.stuckList().filter(p => p.zone === 401);
+  assert.equal(pts.length, 1);
+  assert.ok(pts[0].n >= 2 && pts[0].persistent);
+  assert.ok(b.stuckAhead({ zone: 401, x: 79.3, y: 26.55, facing: 0 }));                // стоит рядом с точкой и смотрит на неё
+});
+
+test('applyDirectives: в журнал пишется только при изменении набора правил', () => {
+  const b = fresh();
+  const d = [{ kind: 'avoid_spot', zone: 401, x: 79, y: 27, r: 1.4, until: inMs(60000) }];
+  b.applyDirectives(d); b.applyDirectives(d);
+  assert.equal(b.logs.filter(l => l[1] === 'advisor').length, 1);
+  b.applyDirectives([]);
+  assert.equal(b.logs.filter(l => l[1] === 'advisor').length, 2);
+});
+
+test('nextPointRadius: запрещённая советником точка пропускается, оштрафованная теряет половину веса', () => {
+  const s = { x: 50, y: 50, zone: 401 }, anchor = { x: 50, y: 50 }, cfg = { radius: 3, respawnSec: 60 };
+  // запрет: «жирная» точка в центре запрещена — берём другую (в пределах 1 ед. от якоря)
+  const b = fresh();
+  b.applyDirectives([{ kind: 'avoid_spot', zone: 401, x: 50, y: 50, r: 0.3, until: inMs(60000) }]);
+  b.grindSpots = [{ x: 50, y: 50, kills: 100, empty: 0, visitedAt: 0 }, { x: 50.5, y: 50.5, kills: 5, empty: 0, visitedAt: 0 }];
+  assert.equal(b.nextPointRadius(s, anchor, cfg).x, 50.5);
+  // штраф только у первой точки (r 0.5 вокруг 50,50): её вес 6 / 0.5 * 0.5 = 6 всё ещё выше 4 / 1.2 = 3.3
+  const c = fresh();
+  c.applyDirectives([{ kind: 'penalize_spot', zone: 401, x: 50, y: 50, r: 0.5, until: inMs(60000) }]);
+  c.grindSpots = [{ x: 50.2, y: 50, kills: 6, empty: 0, visitedAt: 0 }, { x: 50.9, y: 50, kills: 4, empty: 0, visitedAt: 0 }];
+  assert.equal(c.nextPointRadius(s, anchor, cfg).x, 50.2);
+  // а при 1 убийстве штраф переворачивает выбор: 1 / 0.5 * 0.5 = 1 против 4 / 1.2 = 3.3 (без штрафа выиграла бы первая: 1 / 0.5 = 2 < 3.3 — тоже вторая, поэтому берём 2 убийства: 2 / 0.5 = 4 > 3.3)
+  c.grindSpots = [{ x: 50.2, y: 50, kills: 2, empty: 0, visitedAt: 0 }, { x: 50.9, y: 50, kills: 4, empty: 0, visitedAt: 0 }];
+  assert.equal(c.nextPointRadius(s, anchor, cfg).x, 50.9);                            // со штрафом 2 / 0.5 * 0.5 = 2 < 3.3
+  const d = fresh();
+  d.grindSpots = c.grindSpots;
+  assert.equal(d.nextPointRadius(s, anchor, cfg).x, 50.2);                            // без правил: 2 / 0.5 = 4 > 3.3
+});
+
+test('buildPatrolRoute: запрещённые советником точки в маршрут не попадают', () => {
+  const b = fresh();
+  b.state = () => ({ zone: 401, x: 50, y: 50 });
+  b.applyDirectives([{ kind: 'avoid_spot', zone: 401, x: 50, y: 50, r: 1, until: inMs(60000) }]);
+  b.grindSpots = [{ x: 50.2, y: 50, kills: 5, empty: 0 }, { x: 55, y: 50, kills: 5, empty: 0 }];
+  const route = b.buildPatrolRoute({ x: 50, y: 50 }, { maxDistance: 20 });
+  assert.equal(route.length, 1);
+  assert.equal(route[0].x, 55);
+});

@@ -4,6 +4,8 @@ import com.example.wowmcp.db.Database;
 import com.example.wowmcp.db.HuntRepository;
 import com.example.wowmcp.db.VendorRepository;
 import com.example.wowmcp.game.GameBridge;
+import com.example.wowmcp.advisor.AdvisorService;
+import com.example.wowmcp.advisor.DirectiveFilter;
 import com.example.wowmcp.game.GameState;
 import com.example.wowmcp.spots.SpotService;
 import org.springframework.ai.tool.annotation.Tool;
@@ -32,13 +34,15 @@ public class HuntTools {
     private final HuntRepository hunts;
     private final VendorRepository vendors;
     private final SpotService spots;
+    private final AdvisorService advisor;
 
-    public HuntTools(GameBridge bridge, Database db, HuntRepository hunts, VendorRepository vendors, SpotService spots) {
+    public HuntTools(GameBridge bridge, Database db, HuntRepository hunts, VendorRepository vendors, SpotService spots, AdvisorService advisor) {
         this.bridge = bridge;
         this.db = db;
         this.hunts = hunts;
         this.vendors = vendors;
         this.spots = spots;
+        this.advisor = advisor;
     }
 
     @Tool(name = "hunt", description = """
@@ -75,6 +79,8 @@ public class HuntTools {
         }
         List<Map<String, Object>> clusters = hunts.bestClusters(zoneId, state.pLvl(), state.x(), state.y(), maxDist, CLUSTERS_PASSED,
                 spots.measuredCells(state.zone()));
+        // правила советника (режим apply): запрещённые клетки убираем, оштрафованные теряют половину оценки
+        clusters = DirectiveFilter.apply(clusters, advisor.activeFor(state.zone()), state.zone(), System.currentTimeMillis());
         if (clusters.isEmpty()) {
             return jsonResult("подходящих мест охоты нет: уровень " + state.pLvl() + ", расстояние ≤ " + maxDist
                     + " (возможно, все помечены пустыми или в zone_map/mob_cluster нет данных)");

@@ -626,8 +626,10 @@ Object.assign(bot, {
     for (const p of this.grindSpots || []) {
       if (Math.hypot(p.x - anchor.x, p.y - anchor.y) > Math.min(cfg.radius, 1.0)) continue;   // вне зоны охоты (не дальше ~50 м от места старта)
       if (p.visitedAt && now - p.visitedAt < cfg.respawnSec * 1000) continue;      // ещё не респавнулось
+      const dirF = this.directiveFactor ? this.directiveFactor(s.zone, p.x, p.y) : 1;   // правила советника: запрет (0) или штраф (0.5)
+      if (dirF === 0) continue;
       const dist = Math.hypot(p.x - s.x, p.y - s.y) + 0.3;                        // от текущей позиции
-      const score = p.kills * Math.pow(0.5, p.empty) / dist;                    // пустые места теряют вес
+      const score = p.kills * Math.pow(0.5, p.empty) / dist * dirF;             // пустые места теряют вес
       if (score > bestScore) { bestScore = score; best = p; }
     }
     return best;
@@ -636,8 +638,10 @@ Object.assign(bot, {
   // patrol: кольцевой маршрут — жадно «ближайшее следующее» от текущей позиции,
   // только места не дальше maxDistance от anchor (до 150 мест)
   buildPatrolRoute(anchor, cfg) {
+    const zone = this.state().zone;
     const left = (this.grindSpots || [])
         .filter(p => Math.hypot(p.x - anchor.x, p.y - anchor.y) <= cfg.maxDistance)
+        .filter(p => !this.directiveFactor || this.directiveFactor(zone, p.x, p.y) !== 0)       // запрещённые советником клетки пропускаем
         .slice(0, 150);
     const route = [];
     let cur = { x: anchor.x, y: anchor.y };

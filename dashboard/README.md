@@ -18,6 +18,7 @@ com.example.wowdashboard
 ├── hunting/   HuntingController               /api/hunting/best — лучшие места охоты: опыт в час, смерти, упоры
 │              HuntingService, HuntingRepository   загрузка данных (снимки опыта, убийства, смерти, упоры)
 │              HuntingModel (чистая модель)  окна по 10 минут, опыт в час, оценка клеток карты 2×2
+├── advisor/   AdvisorController              /api/advisor — правила советника и места упоров (только чтение таблиц wow-mcp)
 └── analyze/   AnalyzeController              /api/analyze, /api/analyze/last, /api/analyzer — разбор моделью
                LogAnalyzer                    отчёт: факты от программы, гипотезы от модели только по значимым проблемам
                ModelClient (OllamaClient)     интерфейс модели и его реализация для Ollama
@@ -42,6 +43,7 @@ js/report-panel.js  общая панель «Разбор журнала» (п�
 js/digest.js        сводка, копирование и скачивание JSON
 js/analyze.js       разбор моделью
 js/hunting.js       блок «Лучшие места охоты»
+js/advisor.js       блок «Советник»
 ```
 Каждый блок страницы живёт в своём модуле и запускается независимо.
 

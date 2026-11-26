@@ -201,5 +201,31 @@ final class SchemaInitializer {
         jdbc.execute("CREATE INDEX IF NOT EXISTS bot_log_profile_ts_idx ON bot_log (profile, ts)");
         jdbc.execute("CREATE INDEX IF NOT EXISTS bot_log_ts_idx ON bot_log (ts)");
         jdbc.execute("ALTER TABLE mob_kill ADD COLUMN IF NOT EXISTS job_uid text");
+        // постоянная память о местах, где бот упирался (сетка 0,1 карты): переживает перезагрузку страницы и чистку журнала
+        jdbc.execute("""
+                CREATE TABLE IF NOT EXISTS stuck_point (
+                  zone     int           NOT NULL,
+                  cx       numeric(6,1)  NOT NULL,
+                  cy       numeric(6,1)  NOT NULL,
+                  n        int           NOT NULL DEFAULT 0,
+                  first_at timestamptz   NOT NULL,
+                  last_at  timestamptz   NOT NULL,
+                  PRIMARY KEY (zone, cx, cy)
+                )""");
+        // правила советника: предложены (show) или применены (apply), действуют до until_at
+        jdbc.execute("""
+                CREATE TABLE IF NOT EXISTS advisor_directive (
+                  id         bigserial   PRIMARY KEY,
+                  created_at timestamptz NOT NULL,
+                  kind       text        NOT NULL,
+                  zone       int,
+                  x          real,
+                  y          real,
+                  r          real,
+                  until_at   timestamptz NOT NULL,
+                  reason     text,
+                  status     text        NOT NULL DEFAULT 'proposed'
+                )""");
+        jdbc.execute("CREATE INDEX IF NOT EXISTS advisor_directive_until_idx ON advisor_directive (until_at)");
     }
 }

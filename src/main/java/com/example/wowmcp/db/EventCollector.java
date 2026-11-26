@@ -34,6 +34,7 @@ public class EventCollector {
     private final LeaderLock leader;
     private final GameEventRepository gameEvents;
     private final com.example.wowmcp.roads.RoadService roads;
+    private final com.example.wowmcp.advisor.AdvisorRepository advisor;
     private final PathRepository paths;
     private final ProfileRepository profiles;
     private final RotationLearner learner;
@@ -65,7 +66,7 @@ public class EventCollector {
     private final java.util.concurrent.atomic.AtomicInteger skipEmpty = new java.util.concurrent.atomic.AtomicInteger();
     private final java.util.concurrent.atomic.AtomicInteger statInsertErrors = new java.util.concurrent.atomic.AtomicInteger();
 
-    public EventCollector(GameBridge bridge, Database db, CastHistoryRepository casts, KillRepository kills, SpellIdResolver spellIds, HuntRepository hunts, LeaderLock leader, GameEventRepository gameEvents, com.example.wowmcp.roads.RoadService roads, PathRepository paths, ProfileRepository profiles, RotationLearner learner, BotLogRepository botLog) {
+    public EventCollector(GameBridge bridge, Database db, CastHistoryRepository casts, KillRepository kills, SpellIdResolver spellIds, HuntRepository hunts, LeaderLock leader, GameEventRepository gameEvents, com.example.wowmcp.roads.RoadService roads, PathRepository paths, ProfileRepository profiles, RotationLearner learner, BotLogRepository botLog, com.example.wowmcp.advisor.AdvisorRepository advisor) {
         this.bridge = bridge;
         this.db = db;
         this.casts = casts;
@@ -79,6 +80,7 @@ public class EventCollector {
         this.profiles = profiles;
         this.botLog = botLog;
         this.learner = learner;
+        this.advisor = advisor;
     }
 
     /** События, о которых стоит уведомить игрока (смерть, конец задачи, продажа). */
@@ -223,6 +225,12 @@ public class EventCollector {
                     botLog.insert(at == 0 ? System.currentTimeMillis() : at, str(ev.get("profile")), str(ev.get("level")),
                             str(ev.get("cat")), str(ev.get("msg")), asInt(ev.get("zone")), asDouble(ev.get("x")),
                             asDouble(ev.get("y")), str(ev.get("jobUid")), dataOf(ev, LOG_COLUMNS));
+                    // упор бота — в постоянную память о таких местах (переживает перезагрузку страницы и чистку журнала)
+                    if ("stuck".equals(str(ev.get("cat"))) && asInt(ev.get("zone")) != null && asDouble(ev.get("x")) != null
+                            && asDouble(ev.get("y")) != null) {
+                        advisor.recordStuck(asInt(ev.get("zone")), asDouble(ev.get("x")), asDouble(ev.get("y")),
+                                at == 0 ? System.currentTimeMillis() : at);
+                    }
                 }
             } else if ("road".equals(type)) {
                 if (db.isEnabled()) {
