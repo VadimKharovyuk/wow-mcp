@@ -2,7 +2,8 @@
 /run function U() local x,y=GetPlayerMapPosition("player") B[3]=x B[4]=y B[5]=GetPlayerFacing() B[6]=UnitHealth("player") B[7]=UnitHealthMax("player") B[8]=UnitAffectingCombat("player") and 1 or 0 B[9]=GetTime() end
 /run function V() B[10]=UnitExists("target") and 1 or 0 B[11]=UnitHealth("target") B[12]=UnitCanAttack("player","target") and 1 or 0 end CreateFrame("Frame"):SetScript("OnUpdate",function() U() V() if W then W() end end)
 /run function W() local m=0 for i=1,9 do local s,d=GetActionCooldown(i) if IsUsableAction(i) and d==0 and IsActionInRange(i)~=0 then m=m+2^(i-1) end end B[13]=m B[16]=UnitIsDead("mouseover") and 1 or 0 B[17]=GetNumLootItems() end
-/run function E(m) B[14]=(m==ERR_BADATTACKFACING or m==SPELL_FAILED_UNIT_NOT_INFRONT) and 1 or (m==ERR_BADATTACKPOS or m==SPELL_FAILED_OUT_OF_RANGE or m==ERR_OUT_OF_RANGE) and 2 or 9 B[15]=GetTime() end
+/run function EH(m) local h=0 for c in tostring(m):gmatch(".") do h=(h*31+c:byte())%99991 end return 10+h end
+/run function E(m) B[14]=(m==ERR_BADATTACKFACING or m==SPELL_FAILED_UNIT_NOT_INFRONT) and 1 or (m==ERR_BADATTACKPOS or m==SPELL_FAILED_OUT_OF_RANGE or m==ERR_OUT_OF_RANGE) and 2 or EH(m) B[15]=GetTime() end
 /run local f=CreateFrame("Frame") f:RegisterEvent("UI_ERROR_MESSAGE") f:SetScript("OnEvent",function(_,_,m) E(m) end) SetCVar("autoLootDefault","1") SetCVar("autoInteract","1")
 /run function X() local t="target" local d=UnitLevel(t) B[18]=d==-1 and 99 or d-UnitLevel("player") B[19]=(UnitIsPlayer(t) and 1 or 0)+(UnitClassification(t)~="normal" and 2 or 0) end
 /run function Y() local t="target" B[19]=B[19]+(UnitIsTapped(t) and not UnitIsTappedByPlayer(t) and 4 or 0) B[20]=(CheckInteractDistance(t,4) and 1 or 0)+(CheckInteractDistance(t,3) and 2 or 0) end

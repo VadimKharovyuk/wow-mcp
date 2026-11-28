@@ -68,11 +68,18 @@ Object.assign(bot, {
       await sleep(4000);
     }
 
-    // 6) воскреснуть (две попытки)
-    for (let i = 0; i < 2; i++) {
+    // 6) воскреснуть. Прилетели по карте (x, y), а труп может быть далеко внизу — игра требует ~35 м по 3D.
+    // Сначала просто пробуем; не вышло — «снижение» (X, как на лётном маунте) и повтор, до 6 попыток.
+    for (let i = 0; i < 6; i++) {
       await chatRetry('/run RetrieveCorpse()');
-      const alive = await this.waitFor(() => { const d = this.deathInfo(); return !!d && !d.dead && !d.ghost; }, 10000, 250, aborted);
+      const alive = await this.waitFor(() => { const d = this.deathInfo(); return !!d && !d.dead && !d.ghost; }, i === 0 ? 8000 : 4000, 250, aborted);
       if (alive || aborted()) break;
+      if (i < 5) {
+        this.warnings.push('воскрешение не вышло — снижаюсь (X), попытка ' + (i + 2));
+        if (this.warnings.length > 20) this.warnings.shift();
+        await this.hold(['X'], 3500);                     // летим вниз; на земле X лишь посадит — следующий шаг поднимет
+        await this.hold(['W'], 250);
+      }
     }
     const fin = this.deathInfo();
     if (!fin || fin.dead || fin.ghost) return fail('не удалось воскреснуть у трупа', { corpse: info });

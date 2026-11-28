@@ -301,14 +301,14 @@ test('activeRotation: экстренные (с условием по HP) выш�
     { spell: 2037478445, learned: true },    // Правосудие света (в priority)
   ];
   const order = b.activeRotation().map(r => r.spell);
-  assert.deepEqual(order, [1672233375, 1363607377, 2037478445, 2008405423, 1191036009, 1568831975]);
+  assert.deepEqual(order, [1672233375, 1363607377, 2037478445, 1880859642, 2008405423, 1191036009, 1568831975]);
 });
 
 test('combatCfg паладина: лишние умения (Очищение, Аура воздаяния, Камень возвращения) в rotationSkip', () => {
   const b = fresh(); b.profile = 'paladin';
   const cc = b.combatCfg();
   for (const h of [2105405526, 1290206130, 242961069, 1433786557, 904078709]) assert.ok(cc.rotationSkip.includes(h), String(h));
-  assert.deepEqual(plain(cc.priority), [1363607377, 2037478445, { spell: 2008405423, minAttackers: 2 }, { spell: 1191036009, minAttackers: 3 }]);
+  assert.deepEqual(plain(cc.priority), [1363607377, 2037478445, 1880859642, { spell: 2008405423, minAttackers: 2 }, { spell: 1191036009, minAttackers: 3 }]);
   assert.equal(cc.rotationSkip.includes(1191036009), false);   // Освящение управляется правилом priority, не пропускается
 });
 
@@ -731,6 +731,32 @@ test('ensureBuffs: умение на перезарядке — таймер б�
     assert.equal(pressed.includes('G'), expectPress);
     assert.equal(b.buffAt.G === 0, !expectPress);
   }
+});
+
+test('combatCfg паладина: Щит праведности (4) третий в приоритете, без условий', () => {
+  const b = fresh();
+  b.profile = 'paladin';
+  const pr = b.combatCfg().priority;
+  assert.equal(pr[2], 1880859642);
+  assert.equal(pr[3].minAttackers, 2);
+});
+
+test('revive: RetrieveCorpse не вышло (труп внизу) — снижение X и повтор, воскресли с третьей попытки', async () => {
+  const b = fresh();
+  let ghost = true, tries = 0;
+  b.deathInfo = () => ({ dead: false, ghost, corpseX: 35, corpseY: 22, recoveryDelay: 0 });
+  b.state = () => ({ x: 0.35, y: 0.22, zone: 407, hp: 1 });
+  b.moveTo = async () => ({ result: 'дошёл' });
+  b.scanScreen = async () => ({ found: false });
+  b.rest = async () => ({ result: 'отдохнул' });
+  b.waitFor = async cond => { await new Promise(r => setTimeout(r, 1)); return cond(); };
+  const held = [];
+  b.hold = async (k, ms) => { held.push(k[0]); };
+  b.__win.chatRetry = async cmd => { if (cmd.includes('RetrieveCorpse') && ++tries >= 3) ghost = false; };
+  const r = await b.revive();
+  assert.equal(r.result, 'воскрешён');
+  assert.equal(tries, 3);
+  assert.deepEqual(held.filter(k => k === 'X').length, 2);
 });
 
 // --- поиск атакующего с поворотом (моб сзади) ---
